@@ -1,6 +1,6 @@
 # Design System — SokoAI (feuille de route de conception)
 
-Source : skill `ui-ux-pro-max` (styles, palettes, typographies, 119 règles UX), adapté au produit
+Source : skills `ui-ux-pro-max` + **`apple-design`** (`.agents/skills/apple-design/SKILL.md` — WWDC Fluid Interfaces, Materials & Depth, Optical Typography, 8 Design Foundations), adaptés au produit
 SokoAI : générateur de boutiques e-commerce africaines (mobile-first, commande WhatsApp, FCFA).
 
 ## 1. Modèle produit
@@ -40,10 +40,22 @@ Toujours exprimer la palette comme tokens Tailwind dans `window.SOKO_THEME` :
 7. **Formulaires :** labels visibles, erreur près du champ, texte d'aide.
 8. **Navigation :** liens #/accueil #/boutique #/histoire #/contact prévisibles + menu burger mobile facile à viser.
 
-## 6. Animation
-- Reveal fade-up sur contenu VISIBLE (jamais opacity:0 par défaut), 200-300ms, easing doux.
-- La motion porte du sens (hiérarchie spatiale), pas une accumulation de gadgets. `prefers-reduced-motion` respecté quand possible.
-- Anti-patterns : une seule durée pour tout, animer width/height, hover uniquement (prévoir états tactiles).
+## 6. Standards `apple-design` (Fluidité, Matériaux & Typographie Optique)
+Issus de `.agents/skills/apple-design/SKILL.md` :
+- **Réponse instantanée au toucher (§1 & §10) :** Feedback dès le `pointer-down` (`active:scale-[0.97] transition-transform duration-100 ease-out`) sur tous les boutons, cartes produit, vignettes et filtres.
+- **Matériaux translucides & Profondeur (§12) :**
+  - `Navbar` et barres flottantes en verre dépoli (`backdrop-blur-xl backdrop-saturate-[180%] bg-background/80`) avec filet lumineux subtil (`border-b border-white/15` ou `border-black/5`).
+  - **Dim to focus :** La modale fiche produit assombrit l'arrière-plan (`bg-black/55 backdrop-blur-sm`) et émerge avec une mise à l'échelle douce. Ne jamais empiler deux surfaces translucides claires.
+- **Typographie optique Apple (§15) :**
+  - **Tracking lié à la taille :** négatif sur les grands titres display (`tracking-[-0.025em]`), neutre sur le corps (`tracking-normal`), positif sur les surtitres/badges uppercase (`tracking-[0.12em]`).
+  - **Leading inversement lié à la taille :** serré sur les titres Hero (`leading-[1.05]`–`leading-[1.12]`), aéré sur le corps (`leading-[1.6]`).
+  - **Prix FCFA :** toujours en `tabular-nums` (`font-variant-numeric: tabular-nums`) pour un alignement parfait des montants et du recalcul quantité × prix.
+- **Physique & Cohérence spatiale (§3, §4, §7) :**
+  - Courbes d'amortissement critique sans rebond parasite (`cubic-bezier(0.22, 1, 0.36, 1)`, 250–350ms), uniquement sur `transform` et `opacity`.
+  - `prefers-reduced-motion` respecté.
+- **8 Fondations Apple (§16 — Simplicity, Craft, Grouping, Wayfinding) :**
+  - Proximité des contrôles : sélecteur de quantité (`-` / `+`) accolé au CTA « Commander sur WhatsApp » avec mise à jour temps réel du prix total en FCFA.
+  - Repérage clair (Wayfinding) : lien actif marqué dans la `Navbar`, fermeture de modale prévisible (bouton fermer $\ge 44\text{px}$, clic scrim, touche `Escape`).
 
 ## 7. Anti-patterns à éviter
 - Emojis en guise d'icônes ; absence d'états de focus clavier ; gris sur gris.
@@ -62,9 +74,14 @@ Toujours exprimer la palette comme tokens Tailwind dans `window.SOKO_THEME` :
 - [ ] Aucune info manquante laissée vide (horaires, ville, zones) — valeurs inventées cohérentes
 - [ ] Aucun lorem/XXX, contenus en français chaleureux (vouvoiement)
 
-## 9. Comment concevoir ce type de site (recette)
+## 9. Comment concevoir ce type de site (recette — Moteur bolt.diy + WebContainers)
 1. **Brief** : produit, ville, ambiance, paiement, WhatsApp → cahier des charges (questions de découverte).
 2. **3 directions artistiques** DISTINCTES (palette + pairing typographique + gabarit hero + ordre sections) ; la direction choisie par le commerçant doit être explicite.
-3. **Fichiers React par convention** : theme.js (tokens) → data/products.js (10+ produits réels) → Navbar/Hero/ProductCard/ProductGrid/Sections/Footer par fichier → App.jsx (routeur hash + `window.__APP__`).
-4. **Auto-réparation** : fichiers requis, composants JSX utilisés mais non définis, erreurs Babel → re-loop LLM ( jusqu'à 3 passes).
-5. **Checklist qualité** ci-dessus avant Publier sur /store/<slug>.
+3. **Protocole `bolt.diy` (`<boltArtifact>` / `<boltAction>`)** :
+   - Génération structurée en `<boltArtifact id="..." title="..." whatsapp="..." city="...">` contenant des `<boltAction type="file" filePath="...">`.
+   - Fichiers React par convention : `src/theme.js` (tokens) → `src/data/products.js` (10+ produits réels) → `Navbar`/`Hero`/`ProductCard`/`ProductGrid`/`Sections`/`Footer` par fichier → `src/App.jsx` (routeur hash).
+   - **Édition différentielle (Chat)** : lors d'une modification, seuls les `<boltAction type="file">` des fichiers modifiés sont renvoyés et fusionnés.
+4. **Exécution WebContainers (`@webcontainer/api` + Vite HMR)** :
+   - Singleton WebContainer démarré avec `coep: "credentialless"` (autorise les images Unsplash) et serveur Vite pré-installé en tâche de fond.
+   - Changement de variante (A / B / C) ou modification chat injecté directement dans `webcontainer.fs` avec mise à jour Vite HMR en `< 50ms`.
+5. **Auto-réparation & Checklist qualité** ci-dessus avant Publier sur `/store/<slug>`.

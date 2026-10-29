@@ -57,8 +57,11 @@ FOOTER RICHE (obligatoire, jamais minimal) :
 - 4 colonnes sur desktop, empilées sur mobile : (1) Marque : logo/nom + slogan + 2-3 phrases sur la maison ; (2) Navigation : liens des 4 pages ; (3) Contact : WhatsApp cliquable, téléphone, ville, e-mail, horaires ; (4) Services : livraison, paiement (badges Wave, Orange Money, MTN MoMo, paiement à la livraison), retours.
 - Barre finale : © <année> nom de la boutique + mentions "Tous droits réservés".
 
-QUALITÉ ATTENDUE :
-- Identité visuelle jamais "template admin/Bootstrap" : audacieux, cohérent, mémorable.
+QUALITÉ ATTENDUE (référentiel apple-design — Fluid Interfaces, Materials & Optical Typography) :
+- Identité visuelle jamais "template admin/Bootstrap" : audacieux, cohérent, mémorable, avec la finition d'une interface Apple.
+- Réponse tactile instantanée : chaque bouton, carte, vignette et filtre réagit immédiatement au press/touch-down (\`active:scale-[0.97] transition-transform duration-100 ease-out\`), zones tactiles ≥ 44×44px.
+- Matériaux translucides & profondeur : header/navbar en verre dépoli (\`backdrop-blur-xl backdrop-saturate-[180%]\`), modale produit avec scrim \`bg-black/60 backdrop-blur-sm\` ("Dim to focus"), ombres progressives et filets subtils.
+- Typographie optique Apple : tracking négatif sur les grands titres display (\`tracking-[-0.025em]\`, \`leading-[1.08]\`), positif sur les petits badges uppercase (\`tracking-[0.12em]\`), et \`tabular-nums\` sur tous les prix FCFA.
 - Le catalogue et les infos reflètent STRICTEMENT le brief du commerçant (produits réels, gamme de prix, livraison, paiement). Si une information manque (horaires, adresse), invente une valeur cohérente ET crédible pour un commerçant local, jamais de placeholder "lorem" ou "XXX".
 
 BLOC META OBLIGATOIRE : juste après <!DOCTYPE html>, une seule fois :

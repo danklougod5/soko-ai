@@ -21,10 +21,10 @@ export function buildReactShell(files: ReactProjectFile[]): string {
 <script src="https://cdn.tailwindcss.com"></script>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <style>
   [x-cloak], .soko-boot { display: none; }
-  html, body { min-height: 100%; }
+  html, body { min-height: 100%; overflow-x: hidden; }
 </style>
 </head>
 <body>
@@ -73,7 +73,16 @@ export function buildReactShell(files: ReactProjectFile[]): string {
   };
   var bundle = "";
   files.forEach(function(f){
-    var src = f.content.replace(/\\b(const|let)\\s/g, "var ");
+    var src = f.content
+      .replace(/^\\s*import\\b[^\\n]*$/gm, "")
+      .replace(/^\\s*export\\s+default\\s+/gm, "")
+      .replace(/^\\s*export\\s+\\{[^}]*\\}\\s*;?\\s*$/gm, "")
+      .replace(/^\\s*export\\s+/gm, "")
+      .replace(/\\b(const|let)\\s/g, "var ")
+      .replace(/(?:var\\s+\\w+\\s*=\\s*)?(?:window\\.)?ReactDOM\\s*\\.[\\s\\S]*?(?:\\.render\\s*\\([\\s\\S]*?\\))?\\s*;?/g, function (m) {
+        if (m.indexOf("createRoot") !== -1 || m.indexOf("render") !== -1) return "";
+        return m;
+      });
     src = src.replace(/document\\.getElementById\\(\\s*(['"])([^'"]*)\\1\\s*\\)/g, function (m, q, id) {
       return "SOKO_el(" + JSON.stringify(id) + ")";
     });
@@ -86,7 +95,7 @@ export function buildReactShell(files: ReactProjectFile[]): string {
   var AppComponent = null;
   try {
     var compiled = Babel.transform(bundle, { presets: [["react", { runtime: "classic" }]], filename: "bundle.jsx" }).code;
-    (new Function(compiled + "\\n;window.__APP__ = (typeof App !== 'undefined') ? App : window.__APP__;"))();
+    (new Function("var React = window.React; var ReactDOM = window.ReactDOM;\\n" + compiled + "\\n;window.__APP__ = (typeof App !== 'undefined') ? App : window.__APP__;"))();
     AppComponent = window.__APP__ || null;
   } catch (e) {
     evalError = e;

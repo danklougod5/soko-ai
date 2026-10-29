@@ -18,7 +18,12 @@ export async function POST(req: NextRequest) {
     }
 
     const result = await editReactProject(files, meta, instruction);
-    return NextResponse.json({ success: true, files: result.files, meta: result.meta });
+    return NextResponse.json({
+      success: true,
+      files: result.files,
+      meta: result.meta,
+      updatedPaths: result.updatedPaths,
+    });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Erreur serveur";
     console.error("Erreur édition projet React :", error);

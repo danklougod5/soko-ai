@@ -18,8 +18,15 @@ import {
   Layers,
   FileCode2,
   X,
+  Cpu,
 } from "lucide-react";
 import { buildReactShell } from "@/lib/react-shell";
+import {
+  ensureWebContainerReady,
+  mountReactProjectFiles,
+  subscribeWebContainer,
+  type WebContainerState,
+} from "@/lib/webcontainer";
 
 interface ReactFile {
   path: string;
@@ -68,11 +75,11 @@ interface DiscoveryResult {
 }
 
 const TIMELINE_STEPS = [
-  "Analyse du brief commerçant",
-  "3 directions artistiques en parallèle",
-  "Écriture des composants React",
-  "Catalogue, pages & routage",
-  "Assemblage du projet",
+  "Analyse de votre activité et de vos besoins",
+  "Création de 3 identités visuelles uniques",
+  "Mise en rayon du catalogue & photos de qualité",
+  "Configuration commande WhatsApp & Paiement mobile",
+  "Finalisation de votre boutique en ligne",
 ];
 
 export default function ReactStudioPage() {
@@ -111,12 +118,36 @@ function ReactStudio() {
   const [chatInput, setChatInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [viewedFile, setViewedFile] = useState<ReactFile | null>(null);
-  const [showFiles, setShowFiles] = useState(true);
+  const isDev = searchParams.get("dev") === "true";
+  const [showFiles, setShowFiles] = useState(false);
+  const [wcState, setWcState] = useState<WebContainerState>({
+    phase: "idle",
+    previewUrl: null,
+    error: null,
+    lastPreviewError: null,
+  });
   const previewEndRef = useRef<HTMLDivElement>(null);
 
   const saveStoreReactMutation = useMutation(api.stores.saveStoreReact);
 
   const active = variants[activeIdx];
+
+  // Démarre le Singleton WebContainer (Vite + React) en tâche de fond dès l'arrivée sur le studio
+  useEffect(() => {
+    const unsub = subscribeWebContainer((state) => setWcState(state));
+    ensureWebContainerReady().catch((err) => {
+      console.warn("[WebContainer] Fallback sur shell Babel:", err);
+    });
+    return unsub;
+  }, []);
+
+  // Synchronise les fichiers de la variante active dans le WebContainer (Vite HMR < 50ms)
+  useEffect(() => {
+    if (!active?.files?.length) return;
+    mountReactProjectFiles(active.files).catch((err) => {
+      console.warn("[WebContainer] Erreur écriture fichiers:", err);
+    });
+  }, [activeIdx, active]);
 
   useEffect(() => {
     if (!landingPrompt || discovery || isLoadingDiscovery) return;
@@ -179,7 +210,7 @@ function ReactStudio() {
     const cityAnswer = answers["city"];
 
     const seededMsgs: ChatMessage[] = [{ id: "u0", role: "user", text: effectivePrompt }];
-    if (notes) seededMsgs.push({ id: "a-brief", role: "assistant", text: `Merci ! Je code le projet React à partir de vos réponses :\n${notes}` });
+    if (notes) seededMsgs.push({ id: "a-brief", role: "assistant", text: `Merci ! Je conçois 3 identités de boutique uniques à partir de vos réponses :\n${notes}` });
     setMessages(seededMsgs);
 
     try {
@@ -212,7 +243,7 @@ function ReactStudio() {
         {
           id: "a0",
           role: "assistant",
-          text: `✨ ${withSlugs.length} projets React prêts ! Comparez (A / B / C), choisissez votre design, puis décrivez ici toute modification : couleurs, sections, textes, produits… Vous pouvez inspecter le code de chaque fichier à gauche.${data.failed?.length ? `\n\n(${data.failed.length} variante(s) n'ont pas abouti.)` : ""}`,
+          text: `✨ Vos 3 directions artistiques sont prêtes ! Comparez les styles (A, B ou C) ci-dessus, puis écrivez-moi ici ce que vous souhaitez ajuster : couleurs, textes, bannières, produits, promotions...${data.failed?.length ? `\n\n(${data.failed.length} variante(s) n'ont pas abouti.)` : ""}`,
         },
       ]);
       setTimeout(() => previewEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
@@ -243,12 +274,21 @@ function ReactStudio() {
       if (!data.success || !data.files?.length) throw new Error(data.error || "Échec modification");
       const newFiles: ReactFile[] = data.files;
       const newMeta: ReactMeta = data.meta;
+      const updatedPaths: string[] = Array.isArray(data.updatedPaths) ? data.updatedPaths : [];
       setVariants((prev) =>
         prev.map((v, i) =>
           i === activeIdx ? { ...v, files: newFiles, meta: { ...v.meta, ...newMeta, slug: v.meta.slug } } : v
         )
       );
-      setMessages((prev) => [...prev, { id: `a-${Date.now()}`, role: "assistant", text: "✅ Projet React modifié et recompilé, l'aperçu est à jour." }]);
+      const updatedLabel = updatedPaths.length ? ` (${updatedPaths.join(", ")})` : "";
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `a-${Date.now()}`,
+          role: "assistant",
+          text: `✅ Modification appliquée avec succès ! Votre boutique a été actualisée en direct.`,
+        },
+      ]);
       setTimeout(() => previewEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
     } catch (err) {
       setMessages((prev) => [...prev, { id: `e-${Date.now()}`, role: "assistant", text: `⚠️ ${err instanceof Error ? err.message : "Erreur"}` }]);
@@ -284,7 +324,7 @@ function ReactStudio() {
               <ArrowLeft className="h-3 w-3" /> Accueil
             </Link>
             <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-500/10 border border-purple-500/30 text-purple-300 text-xs font-bold">
-              <Sparkles className="h-3.5 w-3.5" /> Studio React — vrai projet de code par l&apos;IA
+              <Sparkles className="h-3.5 w-3.5" /> Studio de Création — Votre boutique sur-mesure
             </span>
           </div>
 
@@ -397,9 +437,9 @@ function ReactStudio() {
                 className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl bg-purple-600 hover:bg-purple-500 disabled:opacity-40 text-white font-bold text-sm transition"
               >
                 {isGenerating ? (
-                  <><Loader2 className="h-4 w-4 animate-spin" /> Création de 3 projets React… (2-3 min)</>
+                  <><Loader2 className="h-4 w-4 animate-spin" /> Création de vos 3 boutiques sur-mesure…</>
                 ) : (
-                  <><Sparkles className="h-4 w-4" /> Générer 3 projets React sur-mesure</>
+                  <><Sparkles className="h-4 w-4" /> Créer mes 3 designs de boutique</>
                 )}
               </button>
             </div>
@@ -416,16 +456,20 @@ function ReactStudio() {
         <div className="flex items-center gap-3 min-w-0">
           <span className="h-8 w-8 rounded-lg bg-purple-600 flex items-center justify-center font-black shrink-0">S</span>
           <div className="min-w-0">
-            <p className="text-sm font-bold truncate">{active?.meta.storeName || "Génération en cours…"}</p>
-            <p className="text-[10px] text-slate-500 font-mono truncate">{active ? `/store/${active.meta.slug}` : "projet React sur-mesure"}</p>
+            <p className="text-sm font-bold truncate">{active?.meta.storeName || "Boutique en création…"}</p>
+            <p className="text-[10px] text-slate-500 font-medium truncate">{active ? `Aperçu en direct — ${active.label}` : "Design sur-mesure"}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {active && (
+          <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 text-emerald-300 text-[11px] font-medium">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            Boutique en direct
+          </span>
+          {isDev && active && (
             <button
               onClick={() => setShowFiles(!showFiles)}
               className="p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 transition"
-              title={showFiles ? "Masquer le code" : "Afficher le code"}
+              title={showFiles ? "Masquer le code" : "Afficher le code (Mode Développeur)"}
             >
               <FileCode2 className="h-4 w-4" />
             </button>
@@ -433,16 +477,16 @@ function ReactStudio() {
           <button
             onClick={() => setDeviceMode(deviceMode === "desktop" ? "mobile" : "desktop")}
             className="p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 transition"
-            title={deviceMode === "desktop" ? "Vue mobile" : "Vue desktop"}
+            title={deviceMode === "desktop" ? "Vue mobile" : "Vue ordinateur"}
           >
             {deviceMode === "desktop" ? <Smartphone className="h-4 w-4" /> : <Monitor className="h-4 w-4" />}
           </button>
           <button
             onClick={publish}
             disabled={isGenerating || !active}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-xs font-bold transition"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-xs font-bold transition shadow-lg shadow-emerald-900/30"
           >
-            <Globe className="h-3.5 w-3.5" /> Publier
+            <Globe className="h-3.5 w-3.5" /> Publier ma boutique
           </button>
         </div>
       </div>
@@ -495,8 +539,8 @@ function ReactStudio() {
           </div>
         </div>
 
-        {/* Arborescence fichiers (code viewer) */}
-        {active && showFiles && (
+        {/* Arborescence fichiers (Mode développeur uniquement) */}
+        {isDev && active && showFiles && (
           <div className="w-60 border-r border-white/10 flex flex-col shrink-0 bg-[#0C0C10] max-lg:hidden">
             <p className="text-[10px] uppercase tracking-widest text-slate-500 px-3 py-2.5 border-b border-white/10">
               Projet React — {active.files.length} fichiers
@@ -587,16 +631,25 @@ function ReactStudio() {
                 className="rounded-2xl overflow-hidden shadow-2xl border border-white/15 bg-white transition-all"
                 style={deviceMode === "mobile" ? { width: 390, height: 720 } : { width: "100%", maxWidth: 1100, height: "78vh" }}
               >
-                <iframe
-                  key={`${activeIdx}-${active.files.reduce((n, f) => n + f.content.length, 0)}`}
-                  title={`Aperçu ${active.label}`}
-                  srcDoc={buildReactShell(active.files)}
-                  sandbox="allow-scripts allow-popups allow-forms"
-                  className="w-full h-full grow"
-                />
+                {wcState.phase === "ready" && wcState.previewUrl ? (
+                  <iframe
+                    title={`Aperçu WebContainer ${active.label}`}
+                    src={wcState.previewUrl}
+                    allow="cross-origin-isolated"
+                    className="w-full h-full grow border-0"
+                  />
+                ) : (
+                  <iframe
+                    key={`${activeIdx}-${active.files.reduce((n, f) => n + f.content.length, 0)}`}
+                    title={`Aperçu ${active.label}`}
+                    srcDoc={buildReactShell(active.files)}
+                    sandbox="allow-scripts allow-popups allow-forms"
+                    className="w-full h-full grow"
+                  />
+                )}
               </div>
-              <p className="mt-3 text-[10px] text-slate-500 text-center">
-                Aperçu live du vrai projet React (variante {active.id} : {active.label})
+              <p className="mt-3 text-[11px] text-slate-400 text-center font-medium">
+                Boutique interactive en direct — Variante {active.id} : {active.label}
               </p>
               <div ref={previewEndRef} />
             </>
