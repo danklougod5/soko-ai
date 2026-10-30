@@ -483,6 +483,23 @@ function ReactStudio() {
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
             Boutique en direct
           </span>
+          {wcState.phase !== "ready" && (
+            <span
+              className={`hidden md:inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11px] font-medium ${
+                wcState.phase === "error"
+                  ? "border-amber-500/25 bg-amber-500/10 text-amber-300"
+                  : "border-white/10 bg-white/5 text-slate-300"
+              }`}
+              title={wcState.error || undefined}
+            >
+              {wcState.phase !== "error" && <Loader2 className="h-3 w-3 animate-spin" />}
+              {wcState.phase === "idle" && "Initialisation…"}
+              {wcState.phase === "booting" && "Démarrage du moteur…"}
+              {wcState.phase === "installing" && "Installation des packages…"}
+              {wcState.phase === "starting" && "Compilation Vite…"}
+              {wcState.phase === "error" && "Aperçu Babel (moteur indisponible)"}
+            </span>
+          )}
           {isDev && active && (
             <button
               onClick={() => setShowFiles(!showFiles)}
