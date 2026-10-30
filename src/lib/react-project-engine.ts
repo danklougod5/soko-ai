@@ -187,6 +187,30 @@ function findUndefinedComponents(files: ReactProjectFile[]): string[] {
   return [...used].filter((name) => !defined.has(name) && !globals.has(name));
 }
 
+
+/**
+ * Vérifie les éléments de conversion indispensables à la fiche produit :
+ * sélecteur de quantité et bouton plein écran. Le LLM les oublie parfois.
+ */
+function findMissingCommerceFeatures(files: ReactProjectFile[]): string[] {
+  const all = files.map((f) => f.content).join("\n");
+  const hasModal = /(modal|overlay|selectedProduct|productModal|activeProduct|produit\s*s[ée]lectionn[ée])/i.test(all);
+  if (!hasModal) return [];
+
+  const todo: string[] = [];
+  if (!/(quantity|qty|quantit[ée])/i.test(all)) {
+    todo.push(
+      "La fiche produit n'a PAS de sélecteur de quantité : ajoute un state quantity (min 1) avec deux boutons -/+ accessibles (aria-label « Diminuer la quantité » / « Augmenter la quantité »), affiche la quantité et le prix TOTAL (prix × quantité) dans le CTA WhatsApp."
+    );
+  }
+  if (!/(isFull|fullScreen|fullscreen|plein\s*[ée]cran|maximize)/i.test(all)) {
+    todo.push(
+      "La fiche produit n'a PAS de bouton plein écran : ajoute un state isFull et un bouton (icône SVG Maximize2 / Minimize2, aria-label « Plein écran ») qui bascule la fiche dans un overlay fixed inset-0 z-50 overflow-y-auto bg-black/90 avec la galerie et le CTA en grand."
+    );
+  }
+  return todo;
+}
+
 async function ensureCoreFiles(
   files: ReactProjectFile[],
   meta: ReactProjectMeta,
@@ -197,20 +221,37 @@ async function ensureCoreFiles(
   const undefinedComponents = findUndefinedComponents(cleaned);
   const appFile = cleaned.find((f) => f.path === "src/App.jsx");
   const routerMissing = !appFile || !/hashchange/.test(appFile.content);
+  const commerceMissing = findMissingCommerceFeatures(cleaned);
 
-  if (missing.length === 0 && undefinedComponents.length === 0 && !routerMissing) return cleaned;
+  if (
+    missing.length === 0 &&
+    undefinedComponents.length === 0 &&
+    !routerMissing &&
+    commerceMissing.length === 0
+  ) {
+    return cleaned;
+  }
 
   for (let pass = 0; pass < 3; pass++) {
     const missing = REQUIRED_FILES.filter((req) => !cleaned.some((f) => f.path === req));
     const undefinedComponents = findUndefinedComponents(cleaned);
     const appFile = cleaned.find((f) => f.path === "src/App.jsx");
     const routerMissing = !appFile || !/hashchange/.test(appFile.content);
+    const commerceMissing = findMissingCommerceFeatures(cleaned);
     const compileError =
-      missing.length === 0 && undefinedComponents.length === 0 && !routerMissing
+      missing.length === 0 && undefinedComponents.length === 0 && !routerMissing && commerceMissing.length === 0
         ? await tryCompile(cleaned)
         : null;
 
-    if (missing.length === 0 && undefinedComponents.length === 0 && !routerMissing && !compileError) break;
+    if (
+      missing.length === 0 &&
+      undefinedComponents.length === 0 &&
+      !routerMissing &&
+      commerceMissing.length === 0 &&
+      !compileError
+    ) {
+      break;
+    }
 
     const todo: string[] = [];
     if (missing.length) todo.push(`Fichiers à créer : ${missing.join(", ")}`);
@@ -222,6 +263,7 @@ async function ensureCoreFiles(
       todo.push(
         "src/App.jsx n'a PAS de routeur hash fonctionnel : réécris-le avec const [page, setPage] = useState(...) + un useEffect qui écoute window 'hashchange' et rend les 4 pages (accueil/boutique/histoire/contact)."
       );
+    if (commerceMissing.length) todo.push(...commerceMissing);
     if (compileError)
       todo.push(`ERREUR DE COMPILATION JSX à corriger :\n${compileError}`);
 

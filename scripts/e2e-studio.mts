@@ -18,7 +18,7 @@ await page.goto(
 
 console.log("COI:", await page.evaluate(() => window.crossOriginIsolated));
 
-await page.waitForSelector("text=Générer 3 projets", { timeout: 300000 });
+await page.waitForSelector("text=Créer mes 3 designs de boutique", { timeout: 300000 });
 console.log("[questions] OK");
 
 await page.evaluate(() => {
@@ -31,7 +31,7 @@ await page.evaluate(() => {
   });
 });
 await wait(600);
-await page.click("text=Générer 3 projets", { force: true });
+await page.click("text=Créer mes 3 designs de boutique", { force: true });
 console.log("[generating] …");
 
 // Attend l'aperçu (WebContainer ou fallback srcdoc)

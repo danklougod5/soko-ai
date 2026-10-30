@@ -313,21 +313,43 @@ function findMatchingClose(code: string, openIdx: number): number {
 }
 
 /**
- * Supprime les montages ReactDOM.top-level éventuellement générés dans un composant
- * (ex : `ReactDOM.createRoot(document.getElementById('x')).render(<App />)`),
+ * Supprime les montages top-level éventuellement générés dans un composant
+ * (`ReactDOM.createRoot(...).render(...)`, `const root = createRoot(...); root.render(<App/>)`, …),
  * qui font planter le module car l'élément n'existe pas au moment de l'import.
  */
+const MOUNT_CALL_PATTERNS: RegExp[] = [
+  /(?:window\.)?(?:ReactDOM|ReactDOMClient)\s*\.\s*(?:createRoot|hydrateRoot|render)\s*\(/g,
+  /(?<![\w.$])createRoot\s*\(/g,
+  /(?<![\w.$])hydrateRoot\s*\(/g,
+  /(?<![\w.$])(?:window\.)?([\w$]{1,24})\.render\s*\(/g,
+];
+
+function isJsxMountCall(code: string, openParenIdx: number): boolean {
+  let i = openParenIdx + 1;
+  while (i < code.length && /\s/.test(code[i])) i += 1;
+  return code[i] === "<";
+}
+
 function stripReactDomMounts(code: string): string {
   let out = code;
-  const callRe = /(?:window\.)?(?:ReactDOM|ReactDOMClient)\s*\.\s*(?:createRoot|hydrateRoot|render)\s*\(/g;
 
-  for (let guard = 0; guard < 25; guard++) {
-    callRe.lastIndex = 0;
-    const match = callRe.exec(out);
-    if (!match) break;
+  for (let guard = 0; guard < 40; guard++) {
+    let found: { index: number; openIdx: number } | null = null;
 
-    const openIdx = out.indexOf("(", match.index + match[0].length - 1);
-    const closeIdx = findMatchingClose(out, openIdx);
+    for (const pattern of MOUNT_CALL_PATTERNS) {
+      pattern.lastIndex = 0;
+      const match = pattern.exec(out);
+      if (!match) continue;
+      const openIdx = out.indexOf("(", match.index + match[0].length - 1);
+      if (openIdx === -1) continue;
+      if (!isJsxMountCall(out, openIdx)) continue;
+      found = { index: match.index, openIdx };
+      break;
+    }
+
+    if (!found) break;
+
+    const closeIdx = findMatchingClose(out, found.openIdx);
     if (closeIdx === -1) break;
 
     let end = closeIdx + 1;
@@ -342,10 +364,13 @@ function stripReactDomMounts(code: string): string {
       end = chClose + 1;
     }
 
-    let start = match.index;
+    let start = found.index;
     const lineStart = out.lastIndexOf("\n", start) + 1;
     const prefix = out.slice(lineStart, start);
-    if (/^\s*(?:(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*|[A-Za-z_$][\w$]*\s*=\s*)$/.test(prefix)) {
+    if (
+      /^\s*(?:(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*|[A-Za-z_$][\w$]*\s*=\s*|return\s*)$/.test(prefix) &&
+      /^\s*(?:(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*|[A-Za-z_$][\w$]*\s*=\s*)$/.test(prefix)
+    ) {
       start = lineStart;
     }
 
@@ -355,6 +380,7 @@ function stripReactDomMounts(code: string): string {
     out = out.slice(0, start) + out.slice(end);
   }
 
+  // Assertions résiduelles du style `root.render(<App/>)` déjà Vue/React-style non couvertes
   return out;
 }
 
@@ -486,6 +512,77 @@ function sanitizeForScan(code: string): string {
  * - Garantit exports nommés + default (les LLM mélangent souvent les deux styles)
  * - Injecte un fallback paresseux via window pour les composants/connexions oubliés
  */
+
+/**
+ * Réécrit les imports relatifs d'un fichier pour pointer vers un chemin réellement écrit,
+ * tolérance de casse et d'extension (le LLM écrit parfois ./components/navbar pour Navbar.jsx).
+ * Sans cela, Vite sert l'index.html de fallback pour le module et la page est blanche.
+ */
+export function rewriteRelativeImports(
+  content: string,
+  filePath: string,
+  realPaths: string[]
+): string {
+  if (realPaths.length === 0) return content;
+
+  const index = new Map<string, string>();
+  for (const real of realPaths) {
+    const paths = [real.toLowerCase(), real.replace(/\.(jsx?|tsx?|mjs)$/i, "").toLowerCase()];
+    for (const key of paths) {
+      if (!index.has(key)) index.set(key, real);
+    }
+  }
+
+  const extensions = ["", ".jsx", ".js", ".tsx", ".ts", ".mjs"];
+  const fileDir = filePath.split("/").slice(0, -1).join("/");
+
+  const lookup = (candidate: string): string | null => {
+    const noExt = candidate.replace(/\.(jsx?|tsx?|mjs)$/i, "").toLowerCase();
+    if (index.has(noExt)) return index.get(noExt)!;
+    if (index.has(candidate.toLowerCase())) return index.get(candidate.toLowerCase())!;
+    for (const ext of extensions.slice(1)) {
+      const hit = index.get(noExt + ext);
+      if (hit) return hit;
+    }
+    return null;
+  };
+
+  return content.replace(
+    /\b(from\s*|import\s*|export\s*\*\s+from\s*)["'](\.\.?\/[^"']+)["']/g,
+    (match, prefix: string, specifier: string) => {
+      const baseParts = (specifier.startsWith("/") ? [] : fileDir.split("/"))
+        .filter(Boolean)
+        .concat(specifier.replace(/^\/+/, "").split("/"));
+      const segments: string[] = [];
+      for (const part of baseParts) {
+        if (part === "." || part === "") continue;
+        if (part === "..") {
+          segments.pop();
+        } else {
+          segments.push(part);
+        }
+      }
+
+      const candidate = segments.join("/");
+      const actual = lookup(candidate);
+      // Ne réécrit que si la cible réelle diffère (cas, extension, chemin)
+      if (!actual || actual === candidate) {
+        return match;
+      }
+
+      const fromParts = fileDir.split("/").filter(Boolean);
+      const toParts = actual.split("/");
+      let i = 0;
+      while (i < fromParts.length && i < toParts.length - 1 && fromParts[i] === toParts[i]) i += 1;
+      const ups = Math.max(0, fromParts.length - i);
+      const rel = [...Array(ups).fill(".."), ...toParts.slice(i)].join("/") || "./" + toParts[toParts.length - 1];
+      const normalized = rel.startsWith(".") ? rel : "./" + rel;
+
+      return `${prefix}${JSON.stringify(normalized)}`;
+    }
+  );
+}
+
 export function prepareModuleFile(filePath: string, rawContent: string): string {
   let code = stripReactDomMounts(rawContent.trim());
 
@@ -746,36 +843,11 @@ export class BoltActionRunner {
 }
 
 /**
- * Synchronise l'ensemble des fichiers d'une variante React dans le WebContainer actif.
- * Vite HMR met à jour l'iframe en < 50ms sans redémarrer le serveur ni réinstaller npm.
+ * Construit le point d'entrée Vite (src/main.jsx) : imports ordonnés, polices,
+ * config Tailwind, intercepteur de navigation #/... et montage React.
  */
-export async function mountReactProjectFiles(files: ReactProjectFile[]): Promise<string> {
-  if (currentState.phase === "error") {
-    return "";
-  }
-  const instance = await ensureWebContainerReady();
-  updateState({ lastPreviewError: null });
-
-  await instance.fs.mkdir("src/components", { recursive: true });
-  await instance.fs.mkdir("src/data", { recursive: true });
-
-  const writtenPaths: string[] = [];
-
-  for (const file of files) {
-    const cleanPath = file.path.replace(/^\/+/, "");
-    const dir = cleanPath.split("/").slice(0, -1).join("/");
-    if (dir) {
-      await instance.fs.mkdir(dir, { recursive: true });
-    }
-    const content =
-      cleanPath.startsWith("src/") && isTransformableModule(cleanPath)
-        ? prepareModuleFile(cleanPath, file.content)
-        : file.content;
-    await instance.fs.writeFile(cleanPath, content);
-    writtenPaths.push(cleanPath);
-  }
-
-  // Ordonner les imports dans src/main.jsx : theme -> data/products -> components -> App
+export function buildMainEntry(writtenPaths: string[], rev = Date.now()): string {
+  // Ordonner les imports : theme -> data/products -> components -> App
   const orderWeight = (p: string) => {
     if (p.includes("theme")) return 1;
     if (p.includes("data/")) return 2;
@@ -789,7 +861,6 @@ export async function mountReactProjectFiles(files: ReactProjectFile[]): Promise
     return 6;
   };
 
-  const rev = Date.now();
   const appPath = writtenPaths.find((p) => /^src\/App\.(jsx|tsx|js|ts)$/.test(p)) || "src/App.jsx";
   const sortedImports = writtenPaths
     .filter((p) => p.startsWith("src/") && p !== "src/main.jsx" && p !== appPath)
@@ -797,7 +868,7 @@ export async function mountReactProjectFiles(files: ReactProjectFile[]): Promise
     .map((p) => `import './${p.replace(/^src\//, "")}';`)
     .join("\n");
 
-  const mainEntry = `// SokoAI WebContainer build rev=${rev}
+  return `// SokoAI WebContainer build rev=${rev}
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 window.React = React;
@@ -824,7 +895,7 @@ import AppDefault from './${appPath.replace(/^src\//, "")}';
 
 if (window.SOKO_FONTS) {
   const existingFont = document.getElementById('soko-google-fonts');
-  const families = String(window.SOKO_FONTS).replace(/\|/g, '&family=');
+  const families = String(window.SOKO_FONTS).replace(/\\|/g, '&family=');
   const href = 'https://fonts.googleapis.com/css2?family=' + families + '&display=swap';
   if (existingFont) {
     existingFont.setAttribute('href', href);
@@ -850,7 +921,42 @@ if (RootComp) {
   window.__SOKO_ROOT__.render(React.createElement(RootComp, { key: ${rev} }));
 }
 `;
+}
 
+/**
+ * Synchronise l'ensemble des fichiers d'une variante React dans le WebContainer actif.
+ * Vite HMR met à jour l'iframe en < 50ms sans redémarrer le serveur ni réinstaller npm.
+ */
+export async function mountReactProjectFiles(files: ReactProjectFile[]): Promise<string> {
+  if (currentState.phase === "error") {
+    return "";
+  }
+  const instance = await ensureWebContainerReady();
+  updateState({ lastPreviewError: null });
+
+  await instance.fs.mkdir("src/components", { recursive: true });
+  await instance.fs.mkdir("src/data", { recursive: true });
+
+  const writtenPaths: string[] = [];
+  const realPaths = files.map((f) => f.path.replace(/^\/+/, ""));
+
+  for (const file of files) {
+    const cleanPath = file.path.replace(/^\/+/, "");
+    const dir = cleanPath.split("/").slice(0, -1).join("/");
+    if (dir) {
+      await instance.fs.mkdir(dir, { recursive: true });
+    }
+    let raw = file.content;
+    if (cleanPath.startsWith("src/") && isTransformableModule(cleanPath)) {
+      raw = rewriteRelativeImports(raw, cleanPath, realPaths);
+      raw = prepareModuleFile(cleanPath, raw);
+    }
+    const content = raw;
+    await instance.fs.writeFile(cleanPath, content);
+    writtenPaths.push(cleanPath);
+  }
+
+  const mainEntry = buildMainEntry(writtenPaths);
   await instance.fs.writeFile("src/main.jsx", mainEntry);
 
   const state = getWebContainerState();
