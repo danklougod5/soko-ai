@@ -518,6 +518,110 @@ function sanitizeForScan(code: string): string {
  * tolérance de casse et d'extension (le LLM écrit parfois ./components/navbar pour Navbar.jsx).
  * Sans cela, Vite sert l'index.html de fallback pour le module et la page est blanche.
  */
+
+/**
+ * Crée des modules de repli pour les imports relatifs qui pointent vers des fichiers
+ * absents du projet (le LLM écrit parfois `import { ProductCard } from './components/ProductCard'`
+ * sans générer le fichier). Sans stub, Vite sert l'index.html pour le module -> page blanche.
+ */
+export function buildImportStubs(
+  files: ReactProjectFile[]
+): { contentByPath: Map<string, string>; files: ReactProjectFile[] } {
+  const contentByPath = new Map<string, string>();
+  const withStubs: ReactProjectFile[] = files.map((f) => ({ path: f.path, content: f.content }));
+
+  const index = new Map<string, string>();
+  for (const f of withStubs) {
+    index.set(f.path.toLowerCase(), f.path);
+    index.set(f.path.replace(/\.(jsx?|tsx?|mjs)$/i, "").toLowerCase(), f.path);
+  }
+
+  const extensions = [".jsx", ".js", ".tsx", ".ts", ".mjs"];
+  const resolve = (candidate: string): string | null => {
+    const noExt = candidate.replace(/\.(jsx?|tsx?|mjs)$/i, "");
+    const keys = [candidate.toLowerCase(), noExt.toLowerCase()];
+    for (const key of keys) if (index.has(key)) return index.get(key)!;
+    for (const ext of extensions) {
+      const hit = index.get(noExt.toLowerCase() + ext);
+      if (hit) return hit;
+    }
+    return null;
+  };
+
+  const importRe = /^[^\n]*\bimport\b[^\n]*["'](\.\.?\/[^"']+)["'][^\n]*$/gm;
+
+  let fileIdx = 0;
+  for (const file of withStubs) {
+    fileIdx += 1;
+    const fileDir = file.path.split("/").slice(0, -1).join("/");
+    const fileBase = file.path.split("/").pop()?.replace(/\.[^.]+$/, "") || "f";
+
+    importRe.lastIndex = 0;
+    const replacement = (match: string, spec: string): string => {
+      const baseParts = (spec.startsWith("/") ? [] : fileDir.split("/"))
+        .filter(Boolean)
+        .concat(spec.replace(/^\/+/, "").split("/"));
+      const segments: string[] = [];
+      for (const part of baseParts) {
+        if (part === "." || part === "") continue;
+        if (part === "..") segments.pop();
+        else segments.push(part);
+      }
+      if (resolve(segments.join("/"))) return match;
+
+      const names: string[] = [];
+      let defaultName: string | null = null;
+      const nameRe =
+        /\bimport\s+(?:([\w$]+)\s*,\s*)?(?:\{([^}]*)\}|\*\s+as\s+([\w$]+)|([\w$]+))?\s*?(?:from\s*)?["'][^"']+["']/;
+      const nameMatch = nameRe.exec(match);
+      if (nameMatch) {
+        if (nameMatch[1]) defaultName = nameMatch[1];
+        else if (nameMatch[4] && !nameMatch[3]) defaultName = nameMatch[4];
+        const braces = nameMatch[2];
+        if (braces) {
+          for (const part of braces.split(",")) {
+            const pieces = part.trim().split(/\s+as\s+/);
+            const imported = (pieces[0] || "").trim();
+            if (imported && imported !== "default") names.push(imported);
+          }
+        }
+        if (nameMatch[3]) names.push(nameMatch[3]);
+      }
+
+      const stubRel = "./__soko_stub_" + `${fileBase}_${fileIdx}_` + spec.replace(/[\W]+/g, "_").replace(/^_+|_+$/g, "") + ".js";
+      const stubPath = (fileDir ? fileDir + "/" : "") + stubRel.replace(/^\.\//, "");
+
+      const lines: string[] = [`// SokoAI stub : module non généré (${spec})`, `import React from 'react';`];
+      for (const name of names) {
+        if (/^[A-Z][A-Z0-9_]{2,}$/.test(name)) {
+          const alias = name.toLowerCase();
+          lines.push(
+            `export const ${name} = (typeof window !== 'undefined' ? (window.${name} || window.${alias}) : null) || [];`
+          );
+        } else {
+          lines.push(
+            `export const ${name} = (...args) => { const v = (typeof window !== 'undefined' ? window.${name} : null); if (typeof v === 'function') return v(...args); return (v && v.$$typeof) ? React.createElement(v, args[0]) : null; };`
+          );
+        }
+      }
+      lines.push(
+        `export default (typeof window !== 'undefined' ? (window.${defaultName || "__SOKO_APP__"} || null) : null) || (() => null);`
+      );
+
+      contentByPath.set(stubPath, lines.join("\n") + "\n");
+      return match.replace(/["'][^"']+["']/, `'${stubRel}'`);
+    };
+
+    const next = file.content.replace(importRe, replacement);
+    file.content = next;
+  }
+
+  for (const [stubPath, stubContent] of contentByPath) {
+    withStubs.push({ path: stubPath, content: stubContent });
+  }
+  return { contentByPath, files: withStubs };
+}
+
 export function rewriteRelativeImports(
   content: string,
   filePath: string,
@@ -934,13 +1038,25 @@ export async function mountReactProjectFiles(files: ReactProjectFile[]): Promise
   const instance = await ensureWebContainerReady();
   updateState({ lastPreviewError: null });
 
+  // Purge : une variante précédente a pu écrire des modules que la variante
+  // courante n'a plus (imports résolus vers du code périmé -> rendu faux).
+  try {
+    await instance.fs.rm("src", { recursive: true });
+  } catch {
+    // premier mount : src n'existe pas encore
+  }
+
+  // Stubs automatiques pour les imports vers des fichiers que le LLM n'a jamais créés
+  // (sinon Vite sert l'index.html pour ces modules -> MIME text/html -> page blanche).
+  const stubbed = buildImportStubs(files);
+
   await instance.fs.mkdir("src/components", { recursive: true });
   await instance.fs.mkdir("src/data", { recursive: true });
 
   const writtenPaths: string[] = [];
-  const realPaths = files.map((f) => f.path.replace(/^\/+/, ""));
+  const realPaths = stubbed.files.map((f) => f.path.replace(/^\/+/, ""));
 
-  for (const file of files) {
+  for (const file of stubbed.files) {
     const cleanPath = file.path.replace(/^\/+/, "");
     const dir = cleanPath.split("/").slice(0, -1).join("/");
     if (dir) {
