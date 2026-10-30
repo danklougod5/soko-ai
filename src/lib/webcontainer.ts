@@ -548,16 +548,42 @@ export function buildImportStubs(
     return null;
   };
 
-  const importRe = /^[^\n]*\bimport\b[^\n]*["'](\.\.?\/[^"']+)["'][^\n]*$/gm;
+  // Extraction des noms importés : tolère les imports multi-lignes
+  // (`import {\n  X,\n} from '...'` est courant chez le LLM).
+  const parseImportedNames = (importText: string): { names: string[]; defaultName: string | null } => {
+    const names: string[] = [];
+    let defaultName: string | null = null;
+    const compact = importText.replace(/\n/g, " ");
+    const head = /\bimport\s+(?:([\w$]+)\s*,\s*)?(?:\{([\s\S]*?)\}|\*\s+as\s+([\w$]+)|([\w$]+))?\s*(?:from\s*)?["'][^"']+["']/.exec(
+      compact
+    );
+    if (head) {
+      if (head[1]) defaultName = head[1];
+      else if (head[4] && !head[3]) defaultName = head[4];
+      const braces = head[2];
+      if (braces) {
+        for (const part of braces.split(",")) {
+          const pieces = part.trim().split(/\s+as\s+/);
+          const imported = (pieces[0] || "").trim();
+          if (imported && imported !== "default") names.push(imported);
+        }
+      }
+      if (head[3]) names.push(head[3]);
+    }
+    return { names, defaultName };
+  };
 
-  let fileIdx = 0;
+  // Import statique (static ou multi-lignes) + import dynamique `import('...')
+  const IMPORT_SPEC_RE = /(\bimport\s[\s\S]{0,300}?\bfrom\s*|\bimport\s*\(\s*)(["'])(\.\.?\/[^"']+)\2/g;
+
+  const stubs: Map<string, { names: Set<string>; defaults: Set<string>; spec: string; extless: boolean }> = new Map();
+
   for (const file of withStubs) {
-    fileIdx += 1;
     const fileDir = file.path.split("/").slice(0, -1).join("/");
-    const fileBase = file.path.split("/").pop()?.replace(/\.[^.]+$/, "") || "f";
 
-    importRe.lastIndex = 0;
-    const replacement = (match: string, spec: string): string => {
+    IMPORT_SPEC_RE.lastIndex = 0;
+    for (let m = IMPORT_SPEC_RE.exec(file.content); m; m = IMPORT_SPEC_RE.exec(file.content)) {
+      const spec = m[3];
       const baseParts = (spec.startsWith("/") ? [] : fileDir.split("/"))
         .filter(Boolean)
         .concat(spec.replace(/^\/+/, "").split("/"));
@@ -567,53 +593,55 @@ export function buildImportStubs(
         if (part === "..") segments.pop();
         else segments.push(part);
       }
-      if (resolve(segments.join("/"))) return match;
+      const candidate = segments.join("/");
+      if (!candidate || resolve(candidate)) continue;
 
-      const names: string[] = [];
-      let defaultName: string | null = null;
-      const nameRe =
-        /\bimport\s+(?:([\w$]+)\s*,\s*)?(?:\{([^}]*)\}|\*\s+as\s+([\w$]+)|([\w$]+))?\s*?(?:from\s*)?["'][^"']+["']/;
-      const nameMatch = nameRe.exec(match);
-      if (nameMatch) {
-        if (nameMatch[1]) defaultName = nameMatch[1];
-        else if (nameMatch[4] && !nameMatch[3]) defaultName = nameMatch[4];
-        const braces = nameMatch[2];
-        if (braces) {
-          for (const part of braces.split(",")) {
-            const pieces = part.trim().split(/\s+as\s+/);
-            const imported = (pieces[0] || "").trim();
-            if (imported && imported !== "default") names.push(imported);
-          }
-        }
-        if (nameMatch[3]) names.push(nameMatch[3]);
+      const extless = !/\.(jsx?|tsx?|mjs)$/i.test(candidate);
+      // Vite résout dans l'ordre .mjs .js .mts .ts .jsx .tsx : pour une cible
+      // sans extension, `.js` gagne — on écrit donc soit la cible explicite,
+      // soit `X.js` (+ `X.jsx` en copie) pour couvrir les deux arbres de résolution.
+      const target = extless ? candidate + ".js" : candidate;
+
+      const context = file.content.slice(m.index, m.index + m[0].length + 200);
+      const { names, defaultName } = parseImportedNames(context);
+
+      const existing = stubs.get(target) || {
+        names: new Set<string>(),
+        defaults: new Set<string>(),
+        spec,
+        extless,
+      };
+      for (const n of names) existing.names.add(n);
+      if (defaultName) existing.defaults.add(defaultName);
+      stubs.set(target, existing);
+    }
+  }
+
+  for (const [target, info] of stubs) {
+    const lines: string[] = [`// SokoAI stub : module non généré (${info.spec})`, `import React from 'react';`];
+    for (const name of info.names) {
+      if (/^[A-Z][A-Z0-9_]{2,}$/.test(name)) {
+        const alias = name.toLowerCase();
+        lines.push(
+          `export const ${name} = (typeof window !== 'undefined' ? (window.${name} || window.${alias}) : null) || [];`
+        );
+      } else {
+        lines.push(
+          `export const ${name} = (...args) => { const v = (typeof window !== 'undefined' ? window.${name} : null); if (typeof v === 'function') return v(...args); return (v && v.$$typeof) ? React.createElement(v, args[0]) : null; };`
+        );
       }
+    }
+    const defaultName = [...info.defaults][0];
+    const fallback = defaultName
+      ? `window[${JSON.stringify(defaultName)}] || window[${JSON.stringify(defaultName.toLowerCase())}]`
+      : "window.__SOKO_APP__";
+    lines.push(`export default (typeof window !== 'undefined' ? (${fallback} || null) : null) || (() => null);`);
 
-      const stubRel = "./__soko_stub_" + `${fileBase}_${fileIdx}_` + spec.replace(/[\W]+/g, "_").replace(/^_+|_+$/g, "") + ".js";
-      const stubPath = (fileDir ? fileDir + "/" : "") + stubRel.replace(/^\.\//, "");
-
-      const lines: string[] = [`// SokoAI stub : module non généré (${spec})`, `import React from 'react';`];
-      for (const name of names) {
-        if (/^[A-Z][A-Z0-9_]{2,}$/.test(name)) {
-          const alias = name.toLowerCase();
-          lines.push(
-            `export const ${name} = (typeof window !== 'undefined' ? (window.${name} || window.${alias}) : null) || [];`
-          );
-        } else {
-          lines.push(
-            `export const ${name} = (...args) => { const v = (typeof window !== 'undefined' ? window.${name} : null); if (typeof v === 'function') return v(...args); return (v && v.$$typeof) ? React.createElement(v, args[0]) : null; };`
-          );
-        }
-      }
-      lines.push(
-        `export default (typeof window !== 'undefined' ? (window.${defaultName || "__SOKO_APP__"} || null) : null) || (() => null);`
-      );
-
-      contentByPath.set(stubPath, lines.join("\n") + "\n");
-      return match.replace(/["'][^"']+["']/, `'${stubRel}'`);
-    };
-
-    const next = file.content.replace(importRe, replacement);
-    file.content = next;
+    const content = lines.join("\n") + "\n";
+    contentByPath.set(target, content);
+    if (info.extless) {
+      contentByPath.set(target.replace(/\.js$/, ".jsx"), content);
+    }
   }
 
   for (const [stubPath, stubContent] of contentByPath) {

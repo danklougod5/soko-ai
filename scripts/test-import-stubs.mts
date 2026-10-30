@@ -1,6 +1,7 @@
 /**
- * Test de buildImportStubs : les imports vers des fichiers manquants sont redirigés
- * vers un module de repli exportant les noms demandés.
+ * Test de buildImportStubs : pour tout import relatif vers un fichier manquant,
+ * un module de repli est créé AU CHEMIN ATTENDU (tolère les imports multi-lignes
+ * et dynamiques) — pas besoin de réécrire les imports.
  */
 import { buildImportStubs, rewriteRelativeImports, prepareModuleFile } from "../src/lib/webcontainer";
 
@@ -9,6 +10,11 @@ const files = [
     path: "src/App.jsx",
     content: `import Navbar from './components/Navbar.jsx';
 import { PRODUCT_LIST } from './data/products.js';
+// import multi-ligne vers un fichier manquant
+import {
+  ProductCard,
+  formatPrice
+} from './components/ProductCard';
 import AppHeader from './components/AppHeader';
 export default AppHeader;
 `,
@@ -29,32 +35,37 @@ export default function Navbar() { return null; }
 const { contentByPath, files: withStubs } = buildImportStubs(files);
 
 console.log("=== stubs créés ===");
-for (const [p, c] of contentByPath) console.log(p, "|", c.split("\n")[1] || "");
+for (const [p, c] of contentByPath) console.log(p, "|", c.replace(/\n/g, " ").slice(0, 90) + "…");
 
-console.log("=== App.jsx après stub ===");
-console.log(withStubs[0].content);
+const expected = ["src/components/ProductCard.js", "src/components/ProductCard.jsx", "src/components/AppHeader.js", "src/components/AppHeader.jsx", "src/data/catalog.js"];
+let ok = true;
+for (const p of expected) {
+  const hit = contentByPath.has(p);
+  console.log("stub attendu", p, hit ? "OK" : "MANQUANT");
+  if (!hit) ok = false;
+}
+if (!ok) process.exitCode = 1;
 
-// Le contenu complet doit passer esbuild (simule la chaîne de mount)
+// Chaîne complète : passe esbuild (simule le mount)
 const realPaths = withStubs.map((f) => f.path);
-let esbuild: typeof import("esbuild");
-esbuild = await import("esbuild");
+const esbuild = await import("esbuild");
 for (const f of withStubs) {
   if (!f.path.startsWith("src/") || !/\.(jsx|js)$/.test(f.path)) continue;
-  const rewritten = rewriteRelativeImports(f.content, f.path, realPaths);
-  const prepared = prepareModuleFile(f.path, rewritten);
+  const prepared = prepareModuleFile(f.path, rewriteRelativeImports(f.content, f.path, realPaths));
   try {
     await esbuild.transform(prepared, { loader: "jsx" });
     console.log("BUNDLE OK —", f.path);
   } catch (e) {
-    console.log("BUNDLE FAIL —", f.path, String(e).slice(0, 200));
+    console.log("BUNDLE FAIL —", f.path, String(e).split("\n")[0].slice(0, 200));
     process.exitCode = 1;
   }
 }
 
-const appPrepared = prepareModuleFile("src/App.jsx", rewriteRelativeImports(withStubs[0].content, "src/App.jsx", realPaths));
-const stubPath = [...contentByPath.keys()].find((p) => p.includes("AppHeader"));
-const stubPrepared = stubPath ? prepareModuleFile(stubPath, contentByPath.get(stubPath)!) : "";
+// Les imports d'origine ne doivent PAS être mutés
+const app = withStubs[0].content;
 console.log(
-  "import AppHeader pointe vers stub:", appPrepared.includes("__soko_stub_") ? "OK" : "MANQUANT",
-  "| stub exporte default:", stubPrepared.includes("export default") ? "OK" : "MANQUANT"
+  "import ProductCard intact:", app.includes("'./components/ProductCard'") ? "OK" : "MUTÉ",
+  "| catalogue externes nommés OK:", contentByPath.get("src/data/catalog.js")?.includes("export const CATEGORIES") ? "OK" : "MANQUANT",
+  "| ProductCard stub exporte ProductCard + formatPrice:",
+  contentByPath.get("src/components/ProductCard.js")?.includes("export const ProductCard") && contentByPath.get("src/components/ProductCard.js")?.includes("export const formatPrice") ? "OK" : "MANQUANT"
 );

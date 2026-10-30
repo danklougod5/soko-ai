@@ -85,6 +85,7 @@ for (const label of tabs) {
           text: (document.body.innerText || "").replace(/\s+/g, " ").slice(0, 140),
           links,
           overlays: [...document.querySelectorAll("vite-error-overlay")].length,
+          overlayText: (document.querySelector("vite-error-overlay")?.shadowRoot?.textContent || "").replace(/\s+/g, " ").slice(0, 300),
           scrollW: document.documentElement.scrollWidth,
         };
       });
