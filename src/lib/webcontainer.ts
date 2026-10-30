@@ -96,6 +96,17 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  // Certains fichiers générés contiennent du JSX dans des .js : on force le loader JSX
+  esbuild: {
+    loader: 'jsx',
+    include: /src\\/.*\\.(js|jsx)$/,
+    exclude: [],
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      loader: { '.js': 'jsx' },
+    },
+  },
   server: {
     host: true,
     port: 5173,
@@ -265,49 +276,416 @@ export async function ensureWebContainerReady(): Promise<WebContainer> {
 }
 
 /**
- * Prépare un fichier React généré pour qu'il fonctionne dans Vite ES Modules :
- * - Conserve les vrais import/export ES6 (style bolt.diy)
- * - Expose aussi les symboles définis sur window.* pour compatibilité croisée entre fichiers
+ * Vrai si le chemin correspond à un module JS/TS (les .css/.json/.svg ne doivent jamais être transformés).
  */
-function prepareModuleFile(filePath: string, rawContent: string): string {
-  let code = rawContent.trim();
+export function isTransformableModule(filePath: string): boolean {
+  return /\.(jsx?|tsx?|mjs)$/i.test(filePath);
+}
 
-  // 1. Supprimer les montages ReactDOM parasites dans les composants
-  code = code
-    .replace(/(?:const\s+\w+\s*=\s*)?(?:window\.)?ReactDOM\s*\.[\s\S]*?(?:\.render\s*\([\s\S]*?\))?\s*;?/g, (match) => {
-      if (match.includes("createRoot") || match.includes("render")) return "";
-      return match;
-    })
-    .replace(/ReactDOMClient\s*\.\s*createRoot[\s\S]*?;/g, "");
+/**
+ * Trouve l'index de la parenthèse/accolade fermante correspondante en ignorant
+ * les chaînes et littéraux (approximation suffisante pour du code généré).
+ */
+function findMatchingClose(code: string, openIdx: number): number {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = openIdx; i < code.length; i++) {
+    const ch = code[i];
+    if (quote) {
+      if (ch === "\\") {
+        i += 1;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(" || ch === "{" || ch === "[") depth += 1;
+    else if (ch === ")" || ch === "}" || ch === "]") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
 
-  // 2. Supprimer les imports/déclarations React redondants pour éviter "Identifier 'useState' has already been declared"
+/**
+ * Supprime les montages ReactDOM.top-level éventuellement générés dans un composant
+ * (ex : `ReactDOM.createRoot(document.getElementById('x')).render(<App />)`),
+ * qui font planter le module car l'élément n'existe pas au moment de l'import.
+ */
+function stripReactDomMounts(code: string): string {
+  let out = code;
+  const callRe = /(?:window\.)?(?:ReactDOM|ReactDOMClient)\s*\.\s*(?:createRoot|hydrateRoot|render)\s*\(/g;
+
+  for (let guard = 0; guard < 25; guard++) {
+    callRe.lastIndex = 0;
+    const match = callRe.exec(out);
+    if (!match) break;
+
+    const openIdx = out.indexOf("(", match.index + match[0].length - 1);
+    const closeIdx = findMatchingClose(out, openIdx);
+    if (closeIdx === -1) break;
+
+    let end = closeIdx + 1;
+    // Chaînes éventuelles : .render(...) / .unmount()
+    for (;;) {
+      const rest = out.slice(end);
+      const chain = /^\s*\.\s*(?:render|unmount)\s*\(/.exec(rest);
+      if (!chain) break;
+      const chOpen = end + chain[0].length - 1;
+      const chClose = findMatchingClose(out, chOpen);
+      if (chClose === -1) break;
+      end = chClose + 1;
+    }
+
+    let start = match.index;
+    const lineStart = out.lastIndexOf("\n", start) + 1;
+    const prefix = out.slice(lineStart, start);
+    if (/^\s*(?:(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*|[A-Za-z_$][\w$]*\s*=\s*)$/.test(prefix)) {
+      start = lineStart;
+    }
+
+    while (out[end] === ";" || out[end] === " " || out[end] === "\t") end += 1;
+    if (out[end] === "\n") end += 1;
+
+    out = out.slice(0, start) + out.slice(end);
+  }
+
+  return out;
+}
+
+const GLOBAL_IDENTIFIERS = new Set([  "Array", "Boolean", "Date", "Error", "Event", "Function", "Intl", "JSON", "Map", "Math",
+  "Number", "Object", "Promise", "Proxy", "Reflect", "RegExp", "Set", "String", "Symbol",
+  "WeakMap", "WeakSet", "Infinity", "NaN", "URL", "URLSearchParams", "FormData", "Blob",
+  "File", "Image", "Audio", "Worker", "Node", "Element", "HTMLElement", "TextEncoder",
+  "alert", "atob", "btoa", "cancelAnimationFrame", "clearInterval", "clearTimeout",
+  "console", "decodeURI", "decodeURIComponent", "document", "encodeURI", "encodeURIComponent",
+  "fetch", "history", "isFinite", "isNaN", "location", "matchMedia", "navigator", "parseFloat",
+  "parseInt", "performance", "prompt", "requestAnimationFrame", "screen", "scrollTo",
+  "sessionStorage", "setInterval", "setTimeout", "structuredClone", "window",
+  "require", "module", "exports", "process",
+]);
+
+const KEYWORDS = new Set([
+  "if", "for", "while", "switch", "catch", "return", "typeof", "function", "new", "await",
+  "super", "this", "async", "of", "in", "do", "else", "try", "finally", "throw", "delete",
+  "void", "yield", "constructor", "import", "export", "default", "class", "extends",
+]);
+
+/** Symboles fournis par l'en-tête commun de chaque module transformé. */
+const HEADER_BINDINGS = new Set([
+  "React", "ReactDOM", "Fragment", "Suspense", "StrictMode", "createContext", "forwardRef",
+  "memo", "lazy", "startTransition", "useState", "useEffect", "useMemo", "useRef",
+  "useCallback", "useContext", "useReducer", "useLayoutEffect", "useId", "useTransition",
+  "useDeferredValue", "useImperativeHandle", "useDebugValue", "useSyncExternalStore",
+]);
+
+/**
+ * Retire chaînes de caractères et commentaires avant l'analyse des identifiants,
+ * en conservant le contenu des expressions `${...}` des template literals.
+ */
+function sanitizeForScan(code: string): string {
+  let out = "";
+  let i = 0;
+
+  const skipQuoted = (quote: string) => {
+    out += " ";
+    i += 1;
+    while (i < code.length) {
+      if (code[i] === "\\") {
+        i += 2;
+        continue;
+      }
+      if (code[i] === quote) {
+        i += 1;
+        break;
+      }
+      if (code[i] === "\n") out += "\n";
+      i += 1;
+    }
+    out += " ";
+  };
+
+  while (i < code.length) {
+    const ch = code[i];
+    const next = code[i + 1];
+
+    if (ch === "/" && next === "/") {
+      while (i < code.length && code[i] !== "\n") i += 1;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      i += 2;
+      while (i < code.length && !(code[i] === "*" && code[i + 1] === "/")) i += 1;
+      i += 2;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      const prev = code[i - 1] || "";
+      const after = code[i + 1] || "";
+      // Apostrophe dans du texte JSX (l'atelier, d'Abidjan) ≠ début de chaîne
+      if (ch === "'" && /[A-Za-zÀ-ÿ0-9]/.test(prev) && /[A-Za-zÀ-ÿ0-9]/.test(after)) {
+        out += ch;
+        i += 1;
+        continue;
+      }
+      skipQuoted(ch);
+      continue;
+    }
+    if (ch === "`") {
+      out += " ";
+      i += 1;
+      while (i < code.length) {
+        if (code[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        if (code[i] === "`") {
+          i += 1;
+          break;
+        }
+        if (code[i] === "$" && code[i + 1] === "{") {
+          let depth = 0;
+          const start = i;
+          while (i < code.length) {
+            if (code[i] === "{") depth += 1;
+            else if (code[i] === "}") {
+              depth -= 1;
+              if (depth === 0) {
+                i += 1;
+                break;
+              }
+            }
+            i += 1;
+          }
+          out += ` ${code.slice(start + 2, i - 1)} `;
+          continue;
+        }
+        if (code[i] === "\n") out += "\n";
+        i += 1;
+      }
+      out += " ";
+      continue;
+    }
+
+    out += ch;
+    i += 1;
+  }
+
+  return out;
+}
+
+
+/**
+ * Prépare un fichier React généré pour qu'il fonctionne dans Vite ES Modules :
+ * - Conserve les imports/exports ESM (Vite résout la vraie dépendance, plus de course window)
+ * - Garantit exports nommés + default (les LLM mélangent souvent les deux styles)
+ * - Injecte un fallback paresseux via window pour les composants/connexions oubliés
+ */
+export function prepareModuleFile(filePath: string, rawContent: string): string {
+  let code = stripReactDomMounts(rawContent.trim());
+
+  // 1. Neutraliser les imports/déclarations React redondants (le header les fournit)
   code = code
     .replace(/^\s*import\s+[^\n;]*from\s+["']react["']\s*;?\s*$/gm, "")
     .replace(/^\s*import\s+[^\n;]*from\s+["']react-dom(?:\/client)?["']\s*;?\s*$/gm, "")
-    .replace(/(?:const|let|var)\s*\{[^}]*\}\s*=\s*(?:window\.)?React\s*;?/g, "")
-    // Supprimer les imports relatifs internes (les composants et données sont déjà chargés dans l'ordre par main.jsx et exposés sur window)
-    .replace(/^\s*import\s+[^\n;]*from\s+["']\.\.?\/[^"']+["']\s*;?\s*$/gm, "");
+    .replace(/^\s*(?:const|let|var)\s*\{[^}]*\}\s*=\s*(?:window\.)?React\s*;?\s*$/gm, "");
+
+  // 2. Icônes lucide : import namespace + repli, pour qu'une icône inexistante
+  //    (WhatsApp, TikTok…) ne casse pas tout le module en ESM strict.
+  code = code.replace(
+    /^\s*import\s*\{([^}]*)\}\s*from\s*["']lucide-react["']\s*;?\s*$/gm,
+    (_match, names: string) => {
+      const bindings: string[] = [];
+      for (const part of names.split(",")) {
+        const pieces = part.trim().split(/\s+as\s+/);
+        const importedName = pieces[0]?.trim();
+        const localName = (pieces[1] || pieces[0] || "").trim();
+        if (!importedName || !localName) continue;
+        bindings.push(`const ${localName} = __lucide.${importedName} || ((props) => null);`);
+      }
+      return [`import * as __lucide from 'lucide-react';`, ...bindings].join("\n");
+    }
+  );
+
+  // 3. Inventaire des imports restants (relatifs + packages)
+  const importedNames = new Set<string>();
+  for (const m of code.matchAll(
+    /^\s*import\s+(?:type\s+)?(?:([\w$]+)\s*,\s*)?(?:\{([^}]*)\}|\*\s+as\s+([\w$]+)|([\w$]+))?\s*from\s*["'][^"']+["']/gm
+  )) {
+    if (m[1]) importedNames.add(m[1]);
+    if (m[2]) {
+      for (const part of m[2].split(",")) {
+        const name = part.trim().split(/\s+as\s+/).pop()?.trim();
+        if (name) importedNames.add(name);
+      }
+    }
+    if (m[3]) importedNames.add(m[3]);
+    if (m[4]) importedNames.add(m[4]);
+  }
+
+  // 4. Déclarations : top-level (pour les exports) + partout (pour éviter les faux positifs)
+  const scan = sanitizeForScan(code);
+  const topLevelDecls = new Set<string>();
+  const declaredAnywhere = new Set<string>();
+
+  const addDecl = (raw: string | undefined, topLevel: boolean) => {
+    const clean = raw?.trim().replace(/^\.\.\./, "").split(/[:=]/)[0]?.trim();
+    if (clean && /^[A-Za-z_$][\w$]*$/.test(clean) && clean !== "React") {
+      declaredAnywhere.add(clean);
+      if (topLevel) topLevelDecls.add(clean);
+    }
+  };
+
+  for (const m of code.matchAll(
+    /^(?:export\s+(?:default\s+)?)?(?:async\s+)?(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)\b/gm
+  )) {
+    addDecl(m[1], true);
+  }
+
+  // Déstructurations top-level : const { a, b: c } = obj / const [x, y] = arr
+  for (const m of code.matchAll(/^(?:export\s+)?(?:const|let|var)\s*(?:\{([^}]*)\}|\[([^\]]*)\])\s*=/gm)) {
+    for (const part of (m[1] || m[2] || "").split(",")) addDecl(part, true);
+  }
+
+  // Déclarations et déstructurations locales (n'importe quelle indentation)
+  for (const m of code.matchAll(/\b(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g)) {
+    addDecl(m[1], false);
+  }
+  for (const m of code.matchAll(/\b(?:const|let|var)\s*(?:\{([^}]*)\}|\[([^\]]*)\])\s*=/g)) {
+    for (const part of (m[1] || m[2] || "").split(",")) addDecl(part, false);
+  }
+
+  // Paramètres de fonctions et callbacks
+  for (const m of scan.matchAll(/\(([^()]*)\)\s*(?:=>|\{)/g)) {
+    for (const part of m[1].split(",")) addDecl(part, false);
+  }
+  for (const m of scan.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*=>/g)) {
+    addDecl(m[1], false);
+  }
 
   const header = [
     `import React from 'react';`,
     `import ReactDOM from 'react-dom/client';`,
-    `window.React = React;`,
-    `window.ReactDOM = ReactDOM;`,
     `const { useState, useEffect, useMemo, useRef, useCallback, useContext, useReducer, Fragment } = React;`,
+    `if (typeof window !== 'undefined') { window.React = React; window.ReactDOM = ReactDOM; }`,
   ].join("\n");
 
-  // 2. Collecter toutes les déclarations top-level (composants PascalCase, constantes et helpers) pour les exposer sur window
-  const topLevelDecls = new Set<string>();
-  for (const m of code.matchAll(/^(?:export\s+(?:default\s+)?)?(?:const|let|var|function)\s+([A-Za-z_]\w*)\b/gm)) {
+  // 5. Fallback paresseux : identifiants utilisés mais ni importés ni déclarés
+  //    (composant JSX ou fonction utilitaire défini dans un autre fichier)
+  const freeComponents = new Set<string>();
+  for (const m of scan.matchAll(/<([A-Z][\w$]*)(?!\s*\.)/g)) {
     const name = m[1];
-    if (name !== "React") {
-      topLevelDecls.add(name);
+    if (
+      !declaredAnywhere.has(name) &&
+      !importedNames.has(name) &&
+      !GLOBAL_IDENTIFIERS.has(name) &&
+      !HEADER_BINDINGS.has(name)
+    ) {
+      freeComponents.add(name);
     }
   }
 
-  const hasDefaultExport = /\bexport\s+default\b/.test(code);
-  const windowBindings: string[] = [];
+  const freeFunctions = new Set<string>();
+  for (const m of scan.matchAll(/(?<![\w$.])([a-z_$][\w$]*)\s*\(/g)) {
+    const name = m[1];
+    if (
+      !KEYWORDS.has(name) &&
+      !declaredAnywhere.has(name) &&
+      !importedNames.has(name) &&
+      !GLOBAL_IDENTIFIERS.has(name) &&
+      !HEADER_BINDINGS.has(name) &&
+      name.length > 2
+    ) {
+      freeFunctions.add(name);
+    }
+  }
 
+  // Constantes globales en MAJUSCULES (PRODUCTS, STORE…) utilisées sans import
+  const freeConstants = new Set<string>();
+  for (const m of scan.matchAll(/(?<![\w$.'"`])([A-Z][A-Z0-9_]{2,})(?![\w$])(?!\s*:)/g)) {
+    const name = m[1];
+    if (
+      !declaredAnywhere.has(name) &&
+      !importedNames.has(name) &&
+      !GLOBAL_IDENTIFIERS.has(name) &&
+      !HEADER_BINDINGS.has(name) &&
+      !freeComponents.has(name)
+    ) {
+      freeConstants.add(name);
+    }
+  }
+
+  const fallbacks: string[] = [];
+  for (const name of freeComponents) {
+    fallbacks.push(
+      `const ${name} = (props) => { const C = typeof window !== 'undefined' ? window.${name} : null; return C ? React.createElement(C, props) : null; };`
+    );
+  }
+  for (const name of freeFunctions) {
+    fallbacks.push(
+      `const ${name} = (...args) => { const fn = typeof window !== 'undefined' ? window.${name} : undefined; return typeof fn === 'function' ? fn(...args) : undefined; };`
+    );
+  }
+  for (const name of freeConstants) {
+    const alias = name.toLowerCase();
+    fallbacks.push(
+      `const ${name} = (typeof window !== 'undefined' && (window.${name} || window.${alias})) || [];`
+    );
+  }
+
+  // 6. Exports : nommés pour chaque déclaration + default
+  const existingExports = new Set<string>();
+  // `export default function X` ne crée PAS d'export nommé : X doit aussi être exporté nommément
+  for (const m of code.matchAll(
+    /^\s*export\s+(?!default\b)(?:async\s+)?(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/gm
+  )) {
+    existingExports.add(m[1]);
+  }
+  for (const m of code.matchAll(/^\s*export\s*\{([^}]*)\}/gm)) {
+    for (const part of m[1].split(",")) {
+      const pieces = part.trim().split(/\s+as\s+/);
+      const exportedAs = (pieces[1] || pieces[0] || "").trim();
+      if (exportedAs && exportedAs !== "default") existingExports.add(exportedAs);
+    }
+  }
+
+  const exportLines: string[] = [];
+  const namedToExport = [...topLevelDecls].filter((n) => !existingExports.has(n) && !importedNames.has(n));
+  if (namedToExport.length > 0) {
+    exportLines.push(`export { ${namedToExport.join(", ")} };`);
+  }
+
+  // Alias camelCase pour les constantes en MAJUSCULES (PRODUCTS → products, STORE → store)
+  const aliases: string[] = [];
+  for (const name of topLevelDecls) {
+    if (!/^[A-Z][A-Z0-9_]+$/.test(name)) continue;
+    const alias = name.toLowerCase();
+    if (alias === name || topLevelDecls.has(alias) || importedNames.has(alias)) continue;
+    aliases.push(`${name} as ${alias}`);
+  }
+  if (aliases.length > 0) {
+    exportLines.push(`export { ${aliases.join(", ")} };`);
+  }
+
+  const hasDefaultExport = /\bexport\s+default\b|as\s+default\b/.test(code);
+  if (!hasDefaultExport) {
+    const baseName = filePath.split("/").pop()?.replace(/\.(jsx|tsx|js|ts|mjs)$/i, "") || "";
+    const candidate =
+      (topLevelDecls.has(baseName) && baseName) ||
+      (topLevelDecls.has("App") && "App") ||
+      [...topLevelDecls].find((n) => /^[A-Z]/.test(n));
+    if (candidate) {
+      exportLines.push(`export default ${candidate};`);
+    }
+  }
+
+  // 7. Exposer sur window pour compatibilité croisée (ancien shell, helpers globaux)
+  const windowBindings: string[] = [];
   for (const name of topLevelDecls) {
     windowBindings.push(`if (typeof ${name} !== 'undefined') window.${name} = ${name};`);
   }
@@ -321,24 +699,12 @@ function prepareModuleFile(filePath: string, rawContent: string): string {
 
   if (filePath.includes("theme")) {
     windowBindings.push(
-      `if (typeof SOKO_THEME !== 'undefined' && !window.SOKO_THEME) window.SOKO_THEME = SOKO_THEME;`,
-      `if (typeof SOKO_FONTS !== 'undefined' && !window.SOKO_FONTS) window.SOKO_FONTS = SOKO_FONTS;`
+      `if (typeof SOKO_THEME !== 'undefined') window.SOKO_THEME = SOKO_THEME;`,
+      `if (typeof SOKO_FONTS !== 'undefined') window.SOKO_FONTS = SOKO_FONTS;`
     );
   }
 
-  // 3. Ajouter un export default si absent (notamment pour App.jsx)
-  if (!hasDefaultExport) {
-    const baseName = filePath.split("/").pop()?.replace(/\.(jsx|tsx|js|ts)$/, "") || "";
-    const candidate =
-      (topLevelDecls.has(baseName) && baseName) ||
-      (topLevelDecls.has("App") && "App") ||
-      [...topLevelDecls].find((n) => /^[A-Z]/.test(n));
-    if (candidate) {
-      windowBindings.push(`export default ${candidate};`);
-    }
-  }
-
-  return `${header}\n\n${code}\n\n${windowBindings.join("\n")}\n`;
+  return [header, ...fallbacks, code, ...windowBindings, ...exportLines].join("\n\n") + "\n";
 }
 
 /**
@@ -364,9 +730,10 @@ export class BoltActionRunner {
       if (folder) {
         await instance.fs.mkdir(folder, { recursive: true });
       }
-      const prepared = normalizedPath.startsWith("src/")
-        ? prepareModuleFile(normalizedPath, action.content)
-        : action.content;
+      const prepared =
+        normalizedPath.startsWith("src/") && isTransformableModule(normalizedPath)
+          ? prepareModuleFile(normalizedPath, action.content)
+          : action.content;
       await instance.fs.writeFile(normalizedPath, prepared);
       return;
     }
@@ -400,9 +767,10 @@ export async function mountReactProjectFiles(files: ReactProjectFile[]): Promise
     if (dir) {
       await instance.fs.mkdir(dir, { recursive: true });
     }
-    const content = cleanPath.startsWith("src/")
-      ? prepareModuleFile(cleanPath, file.content)
-      : file.content;
+    const content =
+      cleanPath.startsWith("src/") && isTransformableModule(cleanPath)
+        ? prepareModuleFile(cleanPath, file.content)
+        : file.content;
     await instance.fs.writeFile(cleanPath, content);
     writtenPaths.push(cleanPath);
   }
@@ -422,8 +790,9 @@ export async function mountReactProjectFiles(files: ReactProjectFile[]): Promise
   };
 
   const rev = Date.now();
+  const appPath = writtenPaths.find((p) => /^src\/App\.(jsx|tsx|js|ts)$/.test(p)) || "src/App.jsx";
   const sortedImports = writtenPaths
-    .filter((p) => p.startsWith("src/") && p !== "src/main.jsx" && !p.endsWith("App.jsx") && !p.endsWith("App.tsx"))
+    .filter((p) => p.startsWith("src/") && p !== "src/main.jsx" && p !== appPath)
     .sort((a, b) => orderWeight(a) - orderWeight(b))
     .map((p) => `import './${p.replace(/^src\//, "")}';`)
     .join("\n");
@@ -451,11 +820,12 @@ if (!window.__SOKO_HASH_INTERCEPTOR__) {
 }
 
 ${sortedImports}
-import AppDefault from './App.jsx';
+import AppDefault from './${appPath.replace(/^src\//, "")}';
 
 if (window.SOKO_FONTS) {
   const existingFont = document.getElementById('soko-google-fonts');
-  const href = 'https://fonts.googleapis.com/css2?family=' + window.SOKO_FONTS + '&display=swap';
+  const families = String(window.SOKO_FONTS).replace(/\|/g, '&family=');
+  const href = 'https://fonts.googleapis.com/css2?family=' + families + '&display=swap';
   if (existingFont) {
     existingFont.setAttribute('href', href);
   } else {

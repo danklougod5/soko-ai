@@ -104,7 +104,7 @@ export function buildReactShell(files: ReactProjectFile[]): string {
   if (window.SOKO_FONTS) {
     var link = document.createElement("link");
     link.rel = "stylesheet";
-    link.href = "https://fonts.googleapis.com/css2?family=" + window.SOKO_FONTS + "&display=swap";
+    link.href = "https://fonts.googleapis.com/css2?family=" + String(window.SOKO_FONTS).replace(/\|/g, "&family=") + "&display=swap";
     document.head.appendChild(link);
   }
   if (window.SOKO_THEME) {

@@ -19,6 +19,8 @@ import {
   FileCode2,
   X,
   Cpu,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import { buildReactShell } from "@/lib/react-shell";
 import {
@@ -112,6 +114,7 @@ function ReactStudio() {
   const [activeIdx, setActiveIdx] = useState(0);
   const [publishedSlug, setPublishedSlug] = useState<string | null>(null);
   const [deviceMode, setDeviceMode] = useState<"desktop" | "mobile">("desktop");
+  const [previewFull, setPreviewFull] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [timelineStep, setTimelineStep] = useState(-1);
 
@@ -148,6 +151,21 @@ function ReactStudio() {
       console.warn("[WebContainer] Erreur écriture fichiers:", err);
     });
   }, [activeIdx, active]);
+
+  // Mode plein écran de l'aperçu : Échap pour sortir
+  useEffect(() => {
+    if (!previewFull) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPreviewFull(false);
+    };
+    window.addEventListener("keydown", onKey);
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previous;
+    };
+  }, [previewFull]);
 
   useEffect(() => {
     if (!landingPrompt || discovery || isLoadingDiscovery) return;
@@ -482,6 +500,14 @@ function ReactStudio() {
             {deviceMode === "desktop" ? <Smartphone className="h-4 w-4" /> : <Monitor className="h-4 w-4" />}
           </button>
           <button
+            onClick={() => setPreviewFull(true)}
+            disabled={!active}
+            className="p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 transition disabled:opacity-40"
+            title="Aperçu en plein écran"
+          >
+            <Maximize2 className="h-4 w-4" />
+          </button>
+          <button
             onClick={publish}
             disabled={isGenerating || !active}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-xs font-bold transition shadow-lg shadow-emerald-900/30"
@@ -628,29 +654,62 @@ function ReactStudio() {
           {!isGenerating && active ? (
             <>
               <div
-                className="rounded-2xl overflow-hidden shadow-2xl border border-white/15 bg-white transition-all"
-                style={deviceMode === "mobile" ? { width: 390, height: 720 } : { width: "100%", maxWidth: 1100, height: "78vh" }}
+                className={
+                  previewFull
+                    ? "fixed inset-0 z-[60] bg-[#08080A] flex flex-col"
+                    : "rounded-2xl overflow-hidden shadow-2xl border border-white/15 bg-white transition-all"
+                }
+                style={
+                  previewFull
+                    ? undefined
+                    : deviceMode === "mobile"
+                      ? { width: 390, height: 720 }
+                      : { width: "100%", maxWidth: 1100, height: "78vh" }
+                }
               >
                 {wcState.phase === "ready" && wcState.previewUrl ? (
                   <iframe
                     title={`Aperçu WebContainer ${active.label}`}
                     src={wcState.previewUrl}
-                    allow="cross-origin-isolated"
-                    className="w-full h-full grow border-0"
+                    allow="cross-origin-isolated; fullscreen"
+                    allowFullScreen
+                    className="w-full h-full grow border-0 bg-white"
                   />
                 ) : (
                   <iframe
                     key={`${activeIdx}-${active.files.reduce((n, f) => n + f.content.length, 0)}`}
                     title={`Aperçu ${active.label}`}
                     srcDoc={buildReactShell(active.files)}
-                    sandbox="allow-scripts allow-popups allow-forms"
-                    className="w-full h-full grow"
+                    sandbox="allow-scripts allow-popups allow-forms allow-modals"
+                    allowFullScreen
+                    className="w-full h-full grow bg-white"
                   />
                 )}
               </div>
-              <p className="mt-3 text-[11px] text-slate-400 text-center font-medium">
+
+              {previewFull && (
+                <>
+                  <div className="fixed top-4 left-4 z-[70] inline-flex items-center gap-2 rounded-full bg-black/70 backdrop-blur px-3 py-1.5 text-[11px] font-semibold text-white border border-white/15">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    Variante {active.id} — {active.label}
+                  </div>
+                  <button
+                    onClick={() => setPreviewFull(false)}
+                    className="fixed top-4 right-4 z-[70] inline-flex items-center gap-2 rounded-full bg-white text-black px-4 py-2 text-xs font-bold shadow-xl hover:bg-slate-200 transition"
+                  >
+                    <Minimize2 className="h-4 w-4" /> Quitter
+                  </button>
+                </>
+              )}
+
+              <p className={previewFull ? "hidden" : "mt-3 text-[11px] text-slate-400 text-center font-medium"}>
                 Boutique interactive en direct — Variante {active.id} : {active.label}
               </p>
+              {!previewFull && wcState.lastPreviewError && (
+                <p className="mt-2 max-w-xl text-[10px] text-amber-400/90 text-center font-mono line-clamp-2">
+                  Vite : {wcState.lastPreviewError}
+                </p>
+              )}
               <div ref={previewEndRef} />
             </>
           ) : !isGenerating ? (
