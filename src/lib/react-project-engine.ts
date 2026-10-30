@@ -1,5 +1,6 @@
 import { callLLMJson, hasLLMKey } from "./llm";
 import { parseBoltProject, serializeBoltProject } from "./bolt-parser";
+import { lintSyntax } from "./syntax-lint";
 import { transformAsync } from "@babel/core";
 import { detectDomainFromPrompt } from "./design-directions";
 
@@ -194,8 +195,14 @@ function findUndefinedComponents(files: ReactProjectFile[]): string[] {
  */
 function findMissingCommerceFeatures(files: ReactProjectFile[]): string[] {
   const all = files.map((f) => f.content).join("\n");
-  const hasModal = /(modal|overlay|selectedProduct|productModal|activeProduct|produit\s*s[ée]lectionn[ée])/i.test(all);
-  if (!hasModal) return [];
+  if (!/wa\.me|whatsapp/i.test(all)) return [];
+  const hasModal =
+    /(modal|modale|overlay|sheet|drawer|detail|d[ée]tail|fiche|selectedProduct|productModal|activeProduct|produit\s*s[ée]lectionn[ée])/i.test(all);
+  if (!hasModal) {
+    return [
+      "Il manque une VRAIE FICHE PRODUIT en modale : au clic sur « Voir le produit », ouvre un overlay (fixed inset-0, fond noir semi-transparent) avec une carte : grande image + 2-3 vignettes (galerie), catégorie, titre, gros prix, description longue, 4+ caractéristiques en lignes clé/valeur, sélecteur de quantité -/+ (min 1), réassurance livraison/paiement, CTA « Commander sur WhatsApp » pré-rempli avec le nom du produit, la quantité et le prix TOTAL, + un bouton plein écran (state isFull) qui passe la fiche en fixed inset-0 z-50 overflow-y-auto bg-black/90. Fermeture : croix, clic sur le fond, touche Échap.",
+    ];
+  }
 
   const todo: string[] = [];
   if (!/(quantity|qty|quantit[ée])/i.test(all)) {
@@ -211,12 +218,62 @@ function findMissingCommerceFeatures(files: ReactProjectFile[]): string[] {
   return todo;
 }
 
+/**
+ * Réparation ciblée : pour chaque fichier dont la syntaxe est cassée (chaîne
+ * tronquée, symboles jamais fermés — symptômes d'une génération coupée à la
+ * limite de tokens), on demande au LLM de réécrire ce SEUL fichier complet.
+ */
+async function repairBrokenSyntaxFiles(
+  files: ReactProjectFile[],
+  variantLabel?: string
+): Promise<ReactProjectFile[]> {
+  const out = [...files];
+
+  for (let i = 0; i < out.length; i++) {
+    const file = out[i];
+    if (!/\.(jsx|js|tsx|ts)$/.test(file.path) || /__soko_stub_/.test(file.content)) continue;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const issue = lintSyntax(file.content);
+      if (!issue) break;
+
+      try {
+        const raw = await callLLMJson<string>({
+          system: `Tu corriges UN fichier React/JSX de boutique SokoAI. On te donnera le fichier entier et l'erreur de syntaxe détectée.
+Si le fichier semble coupé en plein milieu (symbole ou chaîne jamais fermée à la fin), complète-le naturellement en terminant le JSX/l'expression en cours, puis ferme la fonction/le composant.
+LONGUEUR : vise un fichier compact (le fichier d'origine est trop gros, c'est ce qui l'a fait tronquer). Simplifie le style inline plutôt que de déborder.
+Renvoie UNIQUEMENT :
+<boltAction type="file" filePath="${file.path}">
+... contenu complet du fichier corrigé ...
+</boltAction>
+Aucun texte autour, aucun bloc markdown, pas de <boltArtifact> global.`,
+          user: `${variantLabel ? `Direction artistique à respecter : ${variantLabel}\n\n` : ""}ERREUR DE SYNTAXE : ${issue.message} (ligne ${issue.line}, colonne ${issue.col})
+
+FICHIER ${file.path} :
+${file.content.slice(0, 12000)}`,
+          temperature: 0.3,
+          json: false,
+        });
+        if (typeof raw !== "string" || !raw.trim()) break;
+        const reparsed = parseReactProject(raw);
+        const fixed = reparsed.files.find((f) => f.path === file.path);
+        if (!fixed || !fixed.content.trim()) break;
+        out[i] = { path: file.path, content: cleanReactCode(fixed.content) };
+      } catch {
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 async function ensureCoreFiles(
   files: ReactProjectFile[],
   meta: ReactProjectMeta,
   variantLabel?: string
 ): Promise<ReactProjectFile[]> {
-  const cleaned = files.map((f) => ({ path: f.path, content: cleanReactCode(f.content) }));
+  const cleaned0 = files.map((f) => ({ path: f.path, content: cleanReactCode(f.content) }));
+  const cleaned = await repairBrokenSyntaxFiles(cleaned0, variantLabel);
   const missing = REQUIRED_FILES.filter((req) => !cleaned.some((f) => f.path === req));
   const undefinedComponents = findUndefinedComponents(cleaned);
   const appFile = cleaned.find((f) => f.path === "src/App.jsx");
