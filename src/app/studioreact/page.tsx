@@ -591,8 +591,8 @@ function ReactStudio() {
       <div className="min-h-screen bg-[#08080A] text-white px-4 py-10">
         <div className="max-w-3xl mx-auto space-y-8">
           <div className="flex items-center justify-between gap-3">
-            <Link href="/landing" className="text-xs text-zinc-400 hover:text-zinc-200 inline-flex items-center gap-1">
-              <ArrowLeft className="h-3 w-3" /> Vitrine
+            <Link href="/" className="text-xs text-zinc-400 hover:text-zinc-200 inline-flex items-center gap-1">
+              <ArrowLeft className="h-3 w-3" /> Accueil
             </Link>
             <div className="flex items-center gap-2">
               {conversations.length > 0 && (
