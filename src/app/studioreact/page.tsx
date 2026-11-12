@@ -26,7 +26,6 @@ import {
   History,
   Plus,
   MessageSquare,
-  Bot,
 } from "lucide-react";
 import { buildReactShell } from "@/lib/react-shell";
 import {
@@ -45,8 +44,6 @@ import {
   type DiscoveryResult,
 } from "@/lib/studio-storage";
 import { ConversationHistoryModal } from "@/components/studio/ConversationHistoryModal";
-import { SwarmAgentTeam } from "@/components/studio/SwarmAgentTeam";
-import { SwarmModal } from "@/components/studio/SwarmModal";
 import {
   ApprovalCard,
   type ApprovalCardQuestion,
@@ -170,7 +167,6 @@ function ReactStudio() {
   const [conversations, setConversations] = useState<StudioConversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string>(() => `conv-${Date.now()}`);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-  const [isSwarmModalOpen, setIsSwarmModalOpen] = useState(false);
   const convCreatedAtRef = useRef<number>(Date.now());
   const initialLoadDoneRef = useRef(false);
 
@@ -595,19 +591,10 @@ function ReactStudio() {
       <div className="min-h-screen bg-[#08080A] text-white px-4 py-10">
         <div className="max-w-3xl mx-auto space-y-8">
           <div className="flex items-center justify-between gap-3">
-            <Link href="/" className="text-xs text-zinc-400 hover:text-zinc-200 inline-flex items-center gap-1">
-              <ArrowLeft className="h-3 w-3" /> Accueil
+            <Link href="/landing" className="text-xs text-zinc-400 hover:text-zinc-200 inline-flex items-center gap-1">
+              <ArrowLeft className="h-3 w-3" /> Vitrine
             </Link>
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setIsSwarmModalOpen(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-zinc-800/90 hover:bg-zinc-750 border border-zinc-700 text-zinc-200 text-xs font-medium transition cursor-pointer shadow-xs"
-                title="Découvrir l'équipe multi-agents Swarm"
-              >
-                <Bot className="h-3.5 w-3.5 text-zinc-400" />
-                <span>Équipe Swarm (4)</span>
-              </button>
               {conversations.length > 0 && (
                 <button
                   type="button"
@@ -731,11 +718,6 @@ function ReactStudio() {
           onNewConversation={handleStartNewConversation}
           onRefreshList={() => setConversations(listConversations())}
         />
-
-        <SwarmModal
-          isOpen={isSwarmModalOpen}
-          onClose={() => setIsSwarmModalOpen(false)}
-        />
       </div>
     );
   }
@@ -776,19 +758,6 @@ function ReactStudio() {
           >
             <Plus className="h-3.5 w-3.5 text-zinc-400" />
             <span className="hidden md:inline">Nouveau</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setIsSwarmModalOpen(true)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white text-xs font-medium transition cursor-pointer shrink-0"
-            title="Inspecter l'équipe multi-agents Swarm"
-          >
-            <Bot className="h-3.5 w-3.5 text-zinc-400" />
-            <span className="hidden sm:inline">Équipe Swarm</span>
-            <span className="px-1.5 py-0.2 rounded-full bg-emerald-950/60 border border-emerald-800/60 text-[10px] text-emerald-300 font-mono">
-              4 agents
-            </span>
           </button>
         </div>
         <div className="flex items-center gap-2">
@@ -892,13 +861,8 @@ function ReactStudio() {
               </div>
             ))}
             {isGenerating && (
-              <div className="my-2">
-                <SwarmAgentTeam
-                  compact
-                  isModifying={true}
-                  instruction={messages[messages.length - 1]?.text}
-                  targetSection={selectedSection?.name}
-                />
+              <div className="flex items-center gap-2 text-xs text-zinc-400 px-2 py-1 bg-zinc-900/50 rounded-lg border border-zinc-850">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-300" /> L&apos;IA applique la modification…
               </div>
             )}
           </div>
@@ -1022,11 +986,10 @@ function ReactStudio() {
           )}
 
           {isGenerating && (
-            <div className="w-full max-w-2xl my-8">
-              <SwarmAgentTeam
+            <div className="w-full max-w-xl my-8">
+              <AgentGenerationProgress
+                prompt={effectivePrompt}
                 storeName={answers["name"] || active?.meta.storeName}
-                style={answers["style"]}
-                city={answers["city"] || active?.meta.city}
               />
             </div>
           )}
@@ -1167,12 +1130,6 @@ function ReactStudio() {
         onSelectConversation={loadConversationState}
         onNewConversation={handleStartNewConversation}
         onRefreshList={() => setConversations(listConversations())}
-      />
-
-      {/* Modal Équipe Multi-Agents Swarm */}
-      <SwarmModal
-        isOpen={isSwarmModalOpen}
-        onClose={() => setIsSwarmModalOpen(false)}
       />
     </div>
   );
