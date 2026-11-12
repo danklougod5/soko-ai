@@ -258,6 +258,7 @@ export interface DesignDirection {
   name: string;
   tagline: string;
   badge: string;
+  isMain?: boolean;
   style: "warm" | "modern" | "luxe" | "streetwear" | "minimalist" | "artisanat";
   primaryColor: string;
   secondaryColor: string;

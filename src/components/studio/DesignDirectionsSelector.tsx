@@ -34,10 +34,10 @@ export function DesignDirectionsSelector({
         <div className="flex items-center gap-2">
           <Layers className="h-4 w-4 text-purple-400" />
           <h3 className="text-sm font-semibold text-white">
-            Which design direction should I build?
+            Quelle direction artistique souhaitez-vous déployer ?
           </h3>
           <span className="px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-300 text-[10px] font-bold">
-            3 Templates proposés
+            3 Modèles sur-mesure complets
           </span>
         </div>
         <button className="text-slate-400 hover:text-white">
@@ -48,10 +48,11 @@ export function DesignDirectionsSelector({
       {!isCollapsed && (
         <div className="p-4 sm:p-5 space-y-4">
           {/* DIRECTION TABS (3 PROPOSITIONS) */}
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
             {directions.map((dir, index) => {
               const isSelected = dir.id === selectedDirectionId;
               const isViewing = dir.id === activeTabId;
+              const isMain = dir.isMain ?? index === 0;
 
               return (
                 <button
@@ -61,36 +62,65 @@ export function DesignDirectionsSelector({
                     setActiveTabId(dir.id);
                     onSelectDirection(dir);
                   }}
-                  className={`p-2.5 rounded-xl border text-left transition flex flex-col justify-between cursor-pointer ${
+                  className={`p-3 rounded-xl border text-left transition flex flex-col justify-between cursor-pointer relative overflow-hidden group ${
                     isViewing
-                      ? "border-purple-500 bg-purple-500/10 shadow-md shadow-purple-500/10"
-                      : "border-white/8 bg-white/3 hover:bg-white/6 text-slate-400"
+                      ? isMain
+                        ? "border-amber-400/80 bg-gradient-to-b from-amber-500/15 via-purple-500/10 to-[#141520] shadow-lg shadow-amber-500/10 ring-1 ring-amber-400/30"
+                        : "border-purple-500 bg-purple-500/10 shadow-md shadow-purple-500/10"
+                      : isMain
+                        ? "border-amber-500/30 bg-amber-500/5 hover:border-amber-500/50 hover:bg-amber-500/10 text-slate-300"
+                        : "border-white/8 bg-white/3 hover:bg-white/6 text-slate-400"
                   }`}
                 >
-                  <div className="flex items-center justify-between w-full mb-1">
-                    <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-purple-400">
-                      Option #{index + 1}
-                    </span>
+                  {/* Top Badge */}
+                  <div className="flex items-center justify-between w-full mb-1.5 gap-1">
+                    {isMain ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-300 bg-amber-500/20 px-2 py-0.5 rounded-full border border-amber-500/30">
+                        <Sparkles className="h-2.5 w-2.5 text-amber-400" />
+                        Principal • Votre Choix
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full border border-purple-500/20">
+                        Alternative #{index}
+                      </span>
+                    )}
+
                     {isSelected && (
-                      <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+                      <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-emerald-400 bg-emerald-500/15 px-1.5 py-0.5 rounded-md border border-emerald-500/20">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        Actif
+                      </span>
                     )}
                   </div>
-                  <p className="text-xs font-bold text-white line-clamp-1">
-                    {dir.name.replace(/^Direction #\d+ \(/, "").replace(/\)$/, "")}
+
+                  <p className="text-xs font-bold text-white line-clamp-1 group-hover:text-purple-200 transition">
+                    {dir.name.replace(/^Direction #\d+ — /, "").replace(/^Direction #\d+ \(/, "").replace(/\)$/, "")}
                   </p>
-                  <div className="flex items-center gap-1.5 mt-2">
-                    <span 
-                      className="h-2.5 w-2.5 rounded-full border border-black/20" 
-                      style={{ backgroundColor: dir.primaryColor }}
-                    />
-                    <span 
-                      className="h-2.5 w-2.5 rounded-full border border-black/20" 
-                      style={{ backgroundColor: dir.accentColor }}
-                    />
-                    <span 
-                      className="h-2.5 w-2.5 rounded-full border border-black/20" 
-                      style={{ backgroundColor: dir.backgroundColor }}
-                    />
+                  <p className="text-[10px] text-slate-400 line-clamp-1 mt-0.5">
+                    {dir.tagline || dir.badge}
+                  </p>
+
+                  <div className="flex items-center justify-between w-full mt-3 pt-2 border-t border-white/5">
+                    <div className="flex items-center gap-1.5">
+                      <span 
+                        className="h-2.5 w-2.5 rounded-full border border-black/20" 
+                        style={{ backgroundColor: dir.primaryColor }}
+                        title="Couleur primaire"
+                      />
+                      <span 
+                        className="h-2.5 w-2.5 rounded-full border border-black/20" 
+                        style={{ backgroundColor: dir.accentColor }}
+                        title="Couleur d'accent"
+                      />
+                      <span 
+                        className="h-2.5 w-2.5 rounded-full border border-black/20" 
+                        style={{ backgroundColor: dir.backgroundColor }}
+                        title="Couleur de fond"
+                      />
+                    </div>
+                    <span className="text-[9px] text-slate-400 font-mono">
+                      {isMain ? "⭐ Recommandé" : "✨ 100% Complet"}
+                    </span>
                   </div>
                 </button>
               );
@@ -100,6 +130,8 @@ export function DesignDirectionsSelector({
           {/* ACTIVE DIRECTION MOCKUP CARD PREVIEW */}
           {activeDirection && (() => {
             const isDarkDir = activeDirection.style === "modern" || (activeDirection.backgroundColor && (activeDirection.backgroundColor.startsWith("#0") || activeDirection.backgroundColor.startsWith("#1")));
+            const isMainActive = activeDirection.isMain ?? (activeDirection.id === directions[0]?.id);
+
             return (
               <div 
                 style={{
@@ -109,6 +141,29 @@ export function DesignDirectionsSelector({
                 }}
                 className="rounded-xl border overflow-hidden shadow-lg animate-in fade-in duration-200"
               >
+                {/* Visual Role Banner */}
+                {isMainActive ? (
+                  <div className="px-4 py-2 bg-gradient-to-r from-amber-500/20 via-purple-500/15 to-transparent border-b border-amber-500/25 flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2 text-amber-300 font-bold">
+                      <Sparkles className="h-3.5 w-3.5 text-amber-400" />
+                      <span>⭐ MODÈLE PRINCIPAL • Conçu fidèlement selon vos réponses de découverte</span>
+                    </div>
+                    <span className="text-[10px] text-amber-300/90 font-mono bg-amber-500/20 px-2 py-0.5 rounded-md border border-amber-500/30">
+                      Recommandé
+                    </span>
+                  </div>
+                ) : (
+                  <div className="px-4 py-2 bg-gradient-to-r from-purple-500/20 via-blue-500/15 to-transparent border-b border-purple-500/25 flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2 text-purple-300 font-bold">
+                      <Sparkles className="h-3.5 w-3.5 text-purple-400" />
+                      <span>✨ MODÈLE ALTERNATIF COMPLET • Même catalogue, nouvelle direction artistique</span>
+                    </div>
+                    <span className="text-[10px] text-purple-300/90 font-mono bg-purple-500/20 px-2 py-0.5 rounded-md border border-purple-500/30">
+                      Variante complète
+                    </span>
+                  </div>
+                )}
+
                 {/* Mockup Topbar */}
                 <div 
                   className="px-4 py-2 border-b flex items-center justify-between text-[11px] font-bold tracking-wider"
@@ -187,21 +242,41 @@ export function DesignDirectionsSelector({
                   </div>
                 </div>
 
-                {/* Bottom Direction Description */}
+                {/* Bottom Direction Description & Features */}
                 <div 
                   style={{
                     backgroundColor: isDarkDir ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.03)",
                     borderColor: isDarkDir ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
                   }}
-                  className="p-3 border-t text-xs flex items-center justify-between"
+                  className="p-3 border-t text-xs space-y-2"
                 >
-                  <span className="italic line-clamp-1 opacity-80">{activeDirection.description}</span>
-                  <span 
-                    style={{ color: activeDirection.primaryColor }}
-                    className="text-[10px] font-bold uppercase shrink-0 ml-2"
-                  >
-                    {activeDirection.tagline}
-                  </span>
+                  <div className="flex items-center justify-between">
+                    <span className="italic line-clamp-1 opacity-80">{activeDirection.description}</span>
+                    <span 
+                      style={{ color: activeDirection.primaryColor }}
+                      className="text-[10px] font-bold uppercase shrink-0 ml-2"
+                    >
+                      {activeDirection.tagline}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-white/5 text-[10px] font-medium opacity-90">
+                    <span className="px-2 py-0.5 rounded-md bg-white/5 border border-white/10">
+                      📐 Hero : {activeDirection.layoutStructure?.heroType || "Split-card moderne"}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md bg-white/5 border border-white/10">
+                      📦 Catalogue : {activeDirection.layoutStructure?.catalogLayout || "Grille 3 colonnes"}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md bg-white/5 border border-white/10">
+                      ✨ {activeDirection.sections?.length || 8} blocs interactifs
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md bg-white/5 border border-white/10">
+                      🛍️ {activeDirection.products?.length || 6} produits complets
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/20">
+                      💬 WhatsApp & Wave intégrés
+                    </span>
+                  </div>
                 </div>
               </div>
             );

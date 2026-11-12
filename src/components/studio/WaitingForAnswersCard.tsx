@@ -26,10 +26,10 @@ export function WaitingForAnswersCard({
         className="w-full px-5 py-3.5 flex items-center justify-between text-left hover:bg-white/2 transition cursor-pointer border-b border-white/6"
       >
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-slate-200">
+          <span className="text-sm font-semibold text-zinc-200">
             Votre cahier des charges
           </span>
-          <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-pulse" />
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
         </div>
         <div className="text-slate-400 hover:text-white transition">
           {isCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
@@ -88,8 +88,8 @@ export function WaitingForAnswersCard({
                             }}
                             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition cursor-pointer ${
                               isSelected
-                                ? "bg-purple-600 text-white shadow-md shadow-purple-600/30 font-semibold"
-                                : "bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/8"
+                                ? "bg-white text-zinc-950 shadow-sm font-semibold"
+                                : "bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800"
                             }`}
                           >
                             {isSelected && <Check className="h-3 w-3" />}
@@ -113,7 +113,7 @@ export function WaitingForAnswersCard({
                           }
                         }}
                         placeholder="Ou saisissez une réponse personnalisée..."
-                        className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition"
+                        className="flex-1 bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-1.5 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 transition"
                       />
                       <button
                         type="button"

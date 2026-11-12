@@ -19,8 +19,11 @@ export default function HomePage() {
   const [lastPrompt, setLastPrompt] = useState<string>("");
 
   // Le prompt principal de la landing lance le studio React (vrai projet de code)
+  // Navigation pleine page requise pour que le navigateur charge les en-têtes
+  // Cross-Origin Isolation (COOP/COEP) nécessaires à WebContainer (SharedArrayBuffer)
   const handleStartFromLanding = (promptText: string) => {
-    router.push(`/studioreact?prompt=${encodeURIComponent(promptText)}`);
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+    window.location.href = `/studioreact?prompt=${encodeURIComponent(promptText)}`;
   };
 
   const handleNewOrder = (orderData: {

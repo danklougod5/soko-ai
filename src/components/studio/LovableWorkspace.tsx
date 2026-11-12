@@ -5,6 +5,7 @@ import { StoreThemeConfig, PlacedOrder, DesignDirection, ClarificationQuestion, 
 import { StorefrontView } from "@/components/storefront/StorefrontView";
 import { LiveOrdersDashboard } from "./LiveOrdersDashboard";
 import { ThinkingOrbIndicator } from "./ThinkingOrbIndicator";
+import { AgentGenerationProgress } from "./AgentGenerationProgress";
 import { WaitingForAnswersCard } from "./WaitingForAnswersCard";
 import { DesignDirectionsSelector } from "./DesignDirectionsSelector";
 import { InteractiveQuestionFlow } from "./InteractiveQuestionFlow";
@@ -576,11 +577,12 @@ export function LovableWorkspace({
               />
             )}
 
-            {/* STAGE 2: GENERATING 3 SITES (THINKING ORB) */}
+            {/* STAGE 2: GENERATING 3 SITES (AGENT ACTIVITY + TODO LIST) */}
             {flowStage === "generating" && (
-              <div className="rounded-2xl border border-purple-500/25 bg-[#141520] overflow-hidden shadow-xl">
-                <ThinkingOrbIndicator prompt={initialPrompt} size={64} />
-              </div>
+              <AgentGenerationProgress
+                prompt={initialPrompt}
+                storeName={brief?.understanding?.businessType || store.storeName}
+              />
             )}
 
             {/* STAGE 3: READY -> DISPLAY 3 TEMPLATES & SUMMARY */}
@@ -601,14 +603,13 @@ export function LovableWorkspace({
               </>
             )}
 
-            {/* Chat thinking indicator */}
+            {/* Chat thinking indicator with AgentActivity + TodoList */}
             {isThinking && flowStage === "ready" && (
-              <div className="rounded-2xl border border-purple-500/25 bg-[#141520] p-4 flex items-center gap-3">
-                <span className="h-2 w-2 rounded-full bg-purple-400 animate-ping" />
-                <span className="text-xs text-purple-300 font-medium">
-                  Modification de la boutique en cours...
-                </span>
-              </div>
+              <AgentGenerationProgress
+                isModifying
+                prompt={chatInput}
+                storeName={store.storeName}
+              />
             )}
           </div>
 

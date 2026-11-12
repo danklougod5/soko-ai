@@ -2,12 +2,14 @@ import type { ReactProjectFile } from "./react-project-engine";
 
 /**
  * Shell d'exécution du projet React généré : React 18 UMD + Babel standalone
- * + Tailwind CDN. Les fichiers sont concaténés dans l'ordre du manifeste
- * (convention sans import/export) puis compilés à la volée.
+ * + Tailwind CDN.
  *
- * Ordre d'exécution : (1) eval du bundle → définit window.SOKO_THEME /
- * window.SOKO_FONTS / App ; (2) tailwind.config = SOKO_THEME ; (3) render React
- * (les classes sont générées par le MutationObserver du CDN avec le bon config).
+ * Exécution robuste et isolée :
+ * 1. Chaque fichier est nettoyé de ses imports/exports ES et montages parasites.
+ * 2. Les symboles globaux (STORE, PRODUCTS, Icônes Lucide) sont pré-initialisés sur window.
+ * 3. Chaque fichier est transpilé et exécuté individuellement, attachant ses composants sur window.
+ * 4. Si un fichier a un problème local, les autres continuent de fonctionner et un fallback neutre est utilisé.
+ * 5. Le composant App racine est rendu dans le DOM.
  */
 export function buildReactShell(files: ReactProjectFile[]): string {
   const safeJson = JSON.stringify(files).replace(/</g, "\\u003c");
@@ -33,94 +35,171 @@ export function buildReactShell(files: ReactProjectFile[]): string {
 <script>
 (function(){
   var files = JSON.parse(document.getElementById("soko-files").textContent);
-  // Dans une iframe srcdoc, href="#/..." se résout contre l'URL parente et
-  // déclenche une navigation complète. On intercepte tous les clics sur des
-  // ancres et on route via location.hash (le routeur de l'app écoute hashchange).
+
+  // Routage par hash dans l'iframe srcdoc
   document.addEventListener("click", function (e) {
     var el = e.target;
     while (el && el.tagName !== "A") { el = el.parentNode; }
     if (!el || el.tagName !== "A") return;
     var href = el.getAttribute("href") || "";
-    if (href.charAt(0) !== "#") return;
+    if (!href || href.startsWith("http://") || href.startsWith("https://") || href.startsWith("mailto:") || href.startsWith("tel:") || href.startsWith("javascript:")) return;
     e.preventDefault();
-    if (href.length < 2) return;
-    var previous = location.hash;
-    if (previous === href) {
-      try {
-        location.hash = href;
-        if (location.hash === previous) {
-          var ev = document.createEvent("Event");
-          ev.initEvent("hashchange", true, false);
-          window.dispatchEvent(ev);
-        }
-      } catch (err) {}
-      return;
+    var clean = href;
+    while (clean.startsWith("/") || clean.startsWith("#")) {
+      clean = clean.slice(1);
     }
-    try { location.hash = href; } catch (err) {}
-    if (location.hash === previous) {
-      var ev2 = document.createEvent("Event");
-      ev2.initEvent("hashchange", true, false);
-      window.dispatchEvent(ev2);
+    var hash = clean ? "#/" + clean : "#/";
+    if (location.hash !== hash) {
+      location.hash = hash;
     }
+    try {
+      var ev = document.createEvent("Event");
+      ev.initEvent("hashchange", true, false);
+      window.dispatchEvent(ev);
+    } catch (err) {}
   }, true);
-  // Certains fichiers générés contiennent un montage top-level (ReactDOM.createRoot(...)) vers
-  // un id inexistant -> l'eval du bundle crashe et SOKO_THEME/SOKO_FONTS ne s'appliquent jamais.
-  // On neutralise : getElementById renvoie un conteneur caché si l'élément est absent.
+
   var sokoHidden = document.createElement("div");
   window.SOKO_el = function (id) {
     var el = document.getElementById(id);
     return el ? el : sokoHidden;
   };
-  var bundle = "";
-  files.forEach(function(f){
-    var src = f.content
-      .replace(/^\\s*import\\b[^\\n]*$/gm, "")
-      .replace(/^\\s*export\\s+default\\s+/gm, "")
-      .replace(/^\\s*export\\s+\\{[^}]*\\}\\s*;?\\s*$/gm, "")
-      .replace(/^\\s*export\\s+/gm, "")
-      .replace(/\\b(const|let)\\s/g, "var ")
-      .replace(/(?:var\\s+\\w+\\s*=\\s*)?(?:window\\.)?ReactDOM\\s*\\.[\\s\\S]*?(?:\\.render\\s*\\([\\s\\S]*?\\))?\\s*;?/g, function (m) {
-        if (m.indexOf("createRoot") !== -1 || m.indexOf("render") !== -1) return "";
-        return m;
-      });
+
+  // Initialisations globales indispensables pour les composants
+  window.STORE = window.STORE || {
+    name: "Ma Boutique",
+    city: "Abidjan",
+    whatsapp: "2250700000000",
+    tagline: "Votre boutique en ligne",
+    horaires: "7j/7 de 8h à 20h",
+    zonesLivraison: ["Abidjan", "Intérieur"],
+    moyensPaiement: ["Wave", "Orange Money", "MTN MoMo", "Paiement à la livraison"]
+  };
+  window.store = window.STORE;
+  window.PRODUCTS = window.PRODUCTS || [];
+  window.products = window.PRODUCTS;
+
+  // Repli universel pour les icônes lucide-react
+  var commonIcons = [
+    "ShoppingBag", "Menu", "X", "Phone", "Mail", "MapPin", "Clock", "ChevronRight", "ChevronDown",
+    "ChevronLeft", "ChevronUp", "Check", "Star", "Truck", "Sparkles", "Heart", "Search", "Filter",
+    "ArrowRight", "ExternalLink", "ShieldCheck", "CreditCard", "Share2", "Eye", "Plus", "Minus",
+    "Maximize2", "Minimize2", "Info", "AlertCircle", "HelpCircle", "Send", "Sliders", "Tag",
+    "Facebook", "Instagram", "Twitter", "Youtube", "MessageCircle", "Package", "Lock", "Award"
+  ];
+  window.__lucideIcon = function(props) {
+    var cls = (props && props.className) || "w-4 h-4 inline-block";
+    return React.createElement("span", { className: cls, style: { display: "inline-flex", alignItems: "center", justifyContent: "center" } }, "●");
+  };
+  commonIcons.forEach(function(name) {
+    window[name] = window[name] || window.__lucideIcon;
+  });
+  if (typeof Proxy !== "undefined") {
+    window.__lucideProxy = new Proxy({}, {
+      get: function(t, p) { return window[p] || window.__lucideIcon; }
+    });
+  }
+
+  function cleanCodeForShell(code) {
+    var src = code
+      .replace(/<[^<>]*\uFF5C[^<>]*>/g, "")
+      .replace(/<>/g, "<React.Fragment>")
+      .replace(/<\/>/g, "</React.Fragment>")
+      .replace(/\\bimport\\s+[\\s\\S]*?from\\s*["\\x27][^"\\x27]+["\\x27]\\s*;?/g, "")
+      .replace(/\\bimport\\s*["\\x27][^"\\x27]+["\\x27]\\s*;?/g, "")
+      .replace(/(?:(?:var|let|const)\\s+\\w+\\s*=\\s*)?(?:window\\.)?ReactDOMClient\\s*\\.\\s*createRoot\\s*\\([\\s\\S]*?\\)\\s*\\.\\s*render\\s*\\([\\s\\S]*?\\)\\s*;?/g, "")
+      .replace(/(?:(?:var|let|const)\\s+\\w+\\s*=\\s*)?(?:window\\.)?ReactDOM\\s*\\.\\s*createRoot\\s*\\([\\s\\S]*?\\)\\s*\\.\\s*render\\s*\\([\\s\\S]*?\\)\\s*;?/g, "")
+      .replace(/(?:(?:var|let|const)\\s+\\w+\\s*=\\s*)?(?:window\\.)?ReactDOM\\s*\\.\\s*render\\s*\\([\\s\\S]*?\\)\\s*;?/g, "")
+      .replace(/(?:var|let|const)\\s+\\w+\\s*=\\s*(?:window\\.)?(?:ReactDOM|ReactDOMClient)\\.createRoot\\([\\s\\S]*?\\)\\s*;?/g, "")
+      .replace(/\\broot\\s*\\.\\s*render\\s*\\([\\s\\S]*?\\)\\s*;?/g, "")
+      .replace(/\\bexport\\s+default\\s+(function\\*?|class)\\s+([A-Za-z0-9_$]+)/g, "$1 $2")
+      .replace(/\\bexport\\s+default\\s+([A-Za-z0-9_$]+)\\s*;?/g, "/* export default $1 */")
+      .replace(/\\bexport\\s+default\\s+/g, "var __SOKO_DEFAULT__ = ")
+      .replace(/\\bexport\\s*\\{[\\s\\S]*?\\}\\s*;?/g, "")
+      .replace(/\\bexport\\s+(?:async\\s+)?(?:const|let|var|function\\*?|class)\\s+/g, "var ")
+      .replace(/\\b(const|let)\\s/g, "var ");
+
     src = src.replace(/document\\.getElementById\\(\\s*(['"])([^'"]*)\\1\\s*\\)/g, function (m, q, id) {
       return "SOKO_el(" + JSON.stringify(id) + ")";
     });
-    bundle += "/* ===== " + f.path + " ===== */\\n" + src + "\\n";
-    if (f.path.indexOf("data/products") !== -1) {
-      bundle += "var products = PRODUCTS;\\nvar store = STORE;\\n";
+
+    var decls = [];
+    var m1;
+    var reVar = /\\bvar\\s+([A-Za-z0-9_$]+)\\s*=/g;
+    while ((m1 = reVar.exec(src)) !== null) {
+      decls.push("try { if (typeof " + m1[1] + " !== 'undefined') window." + m1[1] + " = " + m1[1] + "; } catch (e) {}");
+    }
+    var m2;
+    var reFn = /\\bfunction\\s+([A-Za-z0-9_$]+)\\s*\\(/g;
+    while ((m2 = reFn.exec(src)) !== null) {
+      decls.push("try { if (typeof " + m2[1] + " !== 'undefined') window." + m2[1] + " = " + m2[1] + "; } catch (e) {}");
+    }
+    return src + "\\n" + decls.join("\\n");
+  }
+
+  // Exécution sécurisée module par module
+  var executionErrors = [];
+  files.forEach(function(f) {
+    if (!/\\.(jsx|js|tsx|ts)$/i.test(f.path)) return;
+    try {
+      var cleaned = cleanCodeForShell(f.content);
+      var compiled = Babel.transform(cleaned, {
+        presets: [["react", { runtime: "classic" }]],
+        filename: f.path
+      }).code;
+      var runner = new Function(
+        "React",
+        "ReactDOM",
+        "var useState = React.useState, useEffect = React.useEffect, useMemo = React.useMemo, useRef = React.useRef, useCallback = React.useCallback;\\n" +
+        "var STORE = window.STORE, store = window.STORE, PRODUCTS = window.PRODUCTS, products = window.PRODUCTS;\\n" +
+        "var Navbar = window.Navbar, Hero = window.Hero, ProductCard = window.ProductCard, ProductGrid = window.ProductGrid, Sections = window.Sections, Footer = window.Footer, App = window.App;\\n" +
+        compiled
+      );
+      runner(window.React, window.ReactDOM);
+    } catch (err) {
+      console.warn("[SokoShell] Attention fichier " + f.path + ":", err);
+      executionErrors.push({ path: f.path, error: err });
+      var baseName = f.path.split("/").pop().replace(/\\.(jsx?|tsx?)$/, "");
+      if (/^[A-Z]/.test(baseName) && !window[baseName]) {
+        window[baseName] = function(props) { return (props && props.children) || null; };
+      }
     }
   });
-  var evalError = null;
-  var AppComponent = null;
-  try {
-    var compiled = Babel.transform(bundle, { presets: [["react", { runtime: "classic" }]], filename: "bundle.jsx" }).code;
-    (new Function("var React = window.React; var ReactDOM = window.ReactDOM;\\n" + compiled + "\\n;window.__APP__ = (typeof App !== 'undefined') ? App : window.__APP__;"))();
-    AppComponent = window.__APP__ || null;
-  } catch (e) {
-    evalError = e;
-  }
 
   if (window.SOKO_FONTS) {
     var link = document.createElement("link");
     link.rel = "stylesheet";
-    link.href = "https://fonts.googleapis.com/css2?family=" + String(window.SOKO_FONTS).replace(/\|/g, "&family=") + "&display=swap";
+    link.href = "https://fonts.googleapis.com/css2?family=" + String(window.SOKO_FONTS).replace(/\\|/g, "&family=") + "&display=swap";
     document.head.appendChild(link);
   }
   if (window.SOKO_THEME) {
     window.tailwind.config = window.SOKO_THEME;
   }
 
-  var root = ReactDOM.createRoot(document.getElementById("root"));
-  if (AppComponent) {
-    try {
-      root.render(React.createElement(AppComponent));
-    } catch (e) {
-      evalError = e;
-    }
+  var AppComponent = window.App || window.__APP__ || null;
+  if (!AppComponent) {
+    AppComponent = function() {
+      var nav = window.Navbar ? React.createElement(window.Navbar) : null;
+      var hero = window.Hero ? React.createElement(window.Hero) : null;
+      var grid = window.ProductGrid ? React.createElement(window.ProductGrid) : null;
+      var foot = window.Footer ? React.createElement(window.Footer) : null;
+      return React.createElement("div", { className: "min-h-screen bg-neutral-950 text-white" },
+        nav,
+        React.createElement("main", null, hero, grid),
+        foot
+      );
+    };
   }
-  if (evalError || !AppComponent) {
-    document.getElementById("root").innerHTML = '<pre style="padding:24px;color:#b91c1c;white-space:pre-wrap;font-size:12px">' + String(evalError && evalError.stack || evalError || "Projet sans composant App").replace(/</g,'&lt;') + '</pre>';
+
+  var root = ReactDOM.createRoot(document.getElementById("root"));
+  try {
+    root.render(React.createElement(AppComponent));
+  } catch (renderErr) {
+    console.error("[SokoShell] Erreur de rendu:", renderErr);
+    document.getElementById("root").innerHTML =
+      '<pre style="padding:24px;color:#f87171;background:#09090b;font-family:monospace;white-space:pre-wrap;font-size:12px">' +
+      String(renderErr && renderErr.stack || renderErr).replace(/</g, "&lt;") +
+      '</pre>';
   }
 })();
 </script>

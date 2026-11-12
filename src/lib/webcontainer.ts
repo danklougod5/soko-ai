@@ -96,6 +96,7 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  appType: 'spa',
   // Certains fichiers générés contiennent du JSX dans des .js : on force le loader JSX
   esbuild: {
     loader: 'jsx',
@@ -123,6 +124,7 @@ export default defineConfig({
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛍️</text></svg>" />
     <title>Boutique SokoAI</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -135,6 +137,11 @@ export default defineConfig({
   </body>
 </html>
 `,
+    },
+  },
+  "favicon.ico": {
+    file: {
+      contents: "",
     },
   },
   src: {
@@ -172,6 +179,16 @@ export default function App() {
 `,
         },
       },
+      "index.css": {
+        file: {
+          contents: `/* SokoAI base stylesheet */\n`,
+        },
+      },
+      "App.css": {
+        file: {
+          contents: `/* SokoAI component stylesheet */\n`,
+        },
+      },
     },
   },
 };
@@ -194,8 +211,10 @@ export async function ensureWebContainerReady(): Promise<WebContainer> {
       window.location.reload();
       return new Promise<WebContainer>(() => {});
     }
+    // Nettoie pour ne pas bloquer les futurs tests
+    sessionStorage.removeItem(reloadKey);
     const coiError =
-      "Isolation Cross-Origin (SharedArrayBuffer) inactive — rechargez l'onglet (Cmd+Shift+R).";
+      "Isolation Cross-Origin (SharedArrayBuffer) inactive — rechargez l'onglet (Cmd+Shift+R) ou utilisez Google Chrome.";
     updateState({ phase: "error", error: coiError });
     throw new Error(coiError);
   } else {
@@ -324,7 +343,8 @@ const MOUNT_CALL_PATTERNS: RegExp[] = [
   /(?<![\w.$])(?:window\.)?([\w$]{1,24})\.render\s*\(/g,
 ];
 
-function isJsxMountCall(code: string, openParenIdx: number): boolean {
+function isJsxMountCall(pattern: RegExp, code: string, openParenIdx: number): boolean {
+  if (/createRoot|hydrateRoot|ReactDOM/i.test(pattern.source)) return true;
   let i = openParenIdx + 1;
   while (i < code.length && /\s/.test(code[i])) i += 1;
   return code[i] === "<";
@@ -342,7 +362,7 @@ function stripReactDomMounts(code: string): string {
       if (!match) continue;
       const openIdx = out.indexOf("(", match.index + match[0].length - 1);
       if (openIdx === -1) continue;
-      if (!isJsxMountCall(out, openIdx)) continue;
+      if (!isJsxMountCall(pattern, out, openIdx)) continue;
       found = { index: match.index, openIdx };
       break;
     }
@@ -615,27 +635,66 @@ export function buildImportStubs(
       if (defaultName) existing.defaults.add(defaultName);
       stubs.set(target, existing);
     }
+
+    // Imports CSS à effet de bord (ex : import './index.css', import '../styles.css')
+    const CSS_IMPORT_RE = /\bimport\s+["'](\.\.?\/[^"']+\.css)["']/g;
+    for (let cm = CSS_IMPORT_RE.exec(file.content); cm; cm = CSS_IMPORT_RE.exec(file.content)) {
+      const spec = cm[1];
+      const baseParts = (spec.startsWith("/") ? [] : fileDir.split("/"))
+        .filter(Boolean)
+        .concat(spec.replace(/^\/+/, "").split("/"));
+      const segments: string[] = [];
+      for (const part of baseParts) {
+        if (part === "." || part === "") continue;
+        if (part === "..") segments.pop();
+        else segments.push(part);
+      }
+      const candidate = segments.join("/");
+      if (candidate && !resolve(candidate)) {
+        contentByPath.set(candidate, "/* SokoAI CSS stub */\n");
+      }
+    }
   }
 
   for (const [target, info] of stubs) {
+    const isStoreFile = /(?:^|\/)store\.(jsx?|tsx?)$/i.test(target) || target.includes("data/store");
+    const isProductsFile = /(?:^|\/)products\.(jsx?|tsx?)$/i.test(target) || target.includes("data/products");
+
     const lines: string[] = [`// SokoAI stub : module non généré (${info.spec})`, `import React from 'react';`];
-    for (const name of info.names) {
-      if (/^[A-Z][A-Z0-9_]{2,}$/.test(name)) {
-        const alias = name.toLowerCase();
-        lines.push(
-          `export const ${name} = (typeof window !== 'undefined' ? (window.${name} || window.${alias}) : null) || [];`
-        );
-      } else {
-        lines.push(
-          `export const ${name} = (...args) => { const v = (typeof window !== 'undefined' ? window.${name} : null); if (typeof v === 'function') return v(...args); return (v && v.$$typeof) ? React.createElement(v, args[0]) : null; };`
-        );
+
+    if (isStoreFile) {
+      lines.push(
+        `export const STORE = (typeof window !== 'undefined' ? (window.STORE || window.store) : null) || { name: "Ma Boutique", city: "Abidjan", whatsapp: "2250700000000", tagline: "Votre boutique en ligne" };`,
+        `export const store = STORE;`,
+        `export default STORE;`
+      );
+    } else if (isProductsFile) {
+      lines.push(
+        `export const PRODUCTS = (typeof window !== 'undefined' ? (window.PRODUCTS || window.products) : null) || [];`,
+        `export const products = PRODUCTS;`,
+        `export const STORE = (typeof window !== 'undefined' ? (window.STORE || window.store) : null) || { name: "Ma Boutique", city: "Abidjan", whatsapp: "2250700000000" };`,
+        `export const store = STORE;`,
+        `export default PRODUCTS;`
+      );
+    } else {
+      for (const name of info.names) {
+        if (/^[A-Z][A-Z0-9_]{2,}$/.test(name)) {
+          const alias = name.toLowerCase();
+          lines.push(
+            `export const ${name} = (typeof window !== 'undefined' ? (window.${name} || window.${alias}) : null) || [];`
+          );
+        } else {
+          lines.push(
+            `export const ${name} = (...args) => { const v = (typeof window !== 'undefined' ? window.${name} : null); if (typeof v === 'function') return v(...args); return (v && v.$$typeof) ? React.createElement(v, args[0]) : null; };`
+          );
+        }
       }
+      const defaultName = [...info.defaults][0];
+      const fallback = defaultName
+        ? `window[${JSON.stringify(defaultName)}] || window[${JSON.stringify(defaultName.toLowerCase())}]`
+        : "window.__SOKO_APP__";
+      lines.push(`export default (typeof window !== 'undefined' ? (${fallback} || null) : null) || (() => null);`);
     }
-    const defaultName = [...info.defaults][0];
-    const fallback = defaultName
-      ? `window[${JSON.stringify(defaultName)}] || window[${JSON.stringify(defaultName.toLowerCase())}]`
-      : "window.__SOKO_APP__";
-    lines.push(`export default (typeof window !== 'undefined' ? (${fallback} || null) : null) || (() => null);`);
 
     const content = lines.join("\n") + "\n";
     contentByPath.set(target, content);
@@ -717,6 +776,17 @@ export function rewriteRelativeImports(
 
 export function prepareModuleFile(filePath: string, rawContent: string): string {
   let code = stripReactDomMounts(rawContent.trim());
+
+  if (/(?:^|\/)store\.(jsx?|tsx?|mjs)$/i.test(filePath) || filePath.includes("data/store")) {
+    if (/^\s*export\s+default\s*\{/m.test(code)) {
+      code = code.replace(/^\s*export\s+default\s*\{/m, "export const STORE = {");
+    }
+  }
+  if (/(?:^|\/)products\.(jsx?|tsx?|mjs)$/i.test(filePath) || filePath.includes("data/products")) {
+    if (/^\s*export\s+default\s*\[/m.test(code)) {
+      code = code.replace(/^\s*export\s+default\s*\[/m, "export const PRODUCTS = [");
+    }
+  }
 
   // 1. Neutraliser les imports/déclarations React redondants (le header les fournit)
   code = code
@@ -897,6 +967,17 @@ export function prepareModuleFile(filePath: string, rawContent: string): string 
     if (alias === name || topLevelDecls.has(alias) || importedNames.has(alias)) continue;
     aliases.push(`${name} as ${alias}`);
   }
+
+  // Alias MAJUSCULES pour les constantes en minuscules (products → PRODUCTS, store → STORE)
+  for (const name of topLevelDecls) {
+    if (!/^[a-z][a-zA-Z0-9_]*$/.test(name)) continue;
+    const upper = name.toUpperCase();
+    if (upper === name || topLevelDecls.has(upper) || importedNames.has(upper) || existingExports.has(upper)) continue;
+    if (name === "store" || name === "products" || name === "theme") {
+      aliases.push(`${name} as ${upper}`);
+    }
+  }
+
   if (aliases.length > 0) {
     exportLines.push(`export { ${aliases.join(", ")} };`);
   }
@@ -916,14 +997,37 @@ export function prepareModuleFile(filePath: string, rawContent: string): string 
   // 7. Exposer sur window pour compatibilité croisée (ancien shell, helpers globaux)
   const windowBindings: string[] = [];
   for (const name of topLevelDecls) {
-    windowBindings.push(`if (typeof ${name} !== 'undefined') window.${name} = ${name};`);
+    // Ne jamais écraser un vrai composant global par un repli neutre (fichier réparé)
+    windowBindings.push(
+      `if (typeof ${name} !== 'undefined' && !(${name} && ${name}.__sokoMissing && window.${name})) window.${name} = ${name};`
+    );
   }
 
-  if (filePath.includes("products")) {
+  if (/(?:^|\/)store\.(jsx?|tsx?|mjs)$/i.test(filePath) || filePath.includes("data/store")) {
+    windowBindings.push(
+      `if (typeof STORE !== 'undefined') { window.STORE = STORE; window.store = STORE; }`,
+      `if (typeof store !== 'undefined' && typeof STORE === 'undefined') { window.STORE = store; window.store = store; }`
+    );
+    if (!existingExports.has("STORE") && !topLevelDecls.has("STORE") && !aliases.some((a) => a.endsWith(" as STORE"))) {
+      exportLines.push(
+        `const __SOKO_STORE_EXPORT__ = (typeof STORE !== 'undefined' ? STORE : (typeof store !== 'undefined' ? store : (typeof window !== 'undefined' ? (window.STORE || window.store) : {}))) || {};`,
+        `export { __SOKO_STORE_EXPORT__ as STORE, __SOKO_STORE_EXPORT__ as store };`
+      );
+    }
+  }
+
+  if (/(?:^|\/)products\.(jsx?|tsx?|mjs)$/i.test(filePath) || filePath.includes("data/products")) {
     windowBindings.push(
       `if (typeof PRODUCTS !== 'undefined') { window.PRODUCTS = PRODUCTS; window.products = PRODUCTS; }`,
-      `if (typeof STORE !== 'undefined') { window.STORE = STORE; window.store = STORE; }`
+      `if (typeof STORE !== 'undefined') { window.STORE = STORE; window.store = STORE; }`,
+      `if (typeof store !== 'undefined' && typeof STORE === 'undefined') { window.STORE = store; window.store = store; }`
     );
+    if (!existingExports.has("STORE") && !topLevelDecls.has("STORE") && !aliases.some((a) => a.endsWith(" as STORE"))) {
+      exportLines.push(
+        `const __SOKO_STORE_EXPORT__ = (typeof STORE !== 'undefined' ? STORE : (typeof store !== 'undefined' ? store : (typeof window !== 'undefined' ? (window.STORE || window.store) : {}))) || {};`,
+        `export { __SOKO_STORE_EXPORT__ as STORE, __SOKO_STORE_EXPORT__ as store };`
+      );
+    }
   }
 
   if (filePath.includes("theme")) {
@@ -1006,7 +1110,7 @@ import ReactDOM from 'react-dom/client';
 window.React = React;
 window.ReactDOM = ReactDOM;
 
-// Intercepteur d'ancres #/... pour le routeur hash dans l'iframe WebContainer
+// Intercepteur d'ancres pour le routeur hash dans l'iframe WebContainer
 if (!window.__SOKO_HASH_INTERCEPTOR__) {
   window.__SOKO_HASH_INTERCEPTOR__ = true;
   document.addEventListener('click', function (e) {
@@ -1014,10 +1118,16 @@ if (!window.__SOKO_HASH_INTERCEPTOR__) {
     while (el && el.tagName !== 'A') el = el.parentNode;
     if (!el || el.tagName !== 'A') return;
     var href = el.getAttribute('href') || '';
-    if (href.charAt(0) !== '#') return;
+    if (!href || href.startsWith('http://') || href.startsWith('https://') || href.startsWith('mailto:') || href.startsWith('tel:') || href.startsWith('javascript:')) return;
     e.preventDefault();
-    if (href.length < 2) return;
-    location.hash = href;
+    var clean = href;
+    while (clean.startsWith('/') || clean.startsWith('#')) {
+      clean = clean.slice(1);
+    }
+    var hash = clean ? '#/' + clean : '#/';
+    if (location.hash !== hash) {
+      location.hash = hash;
+    }
     window.dispatchEvent(new HashChangeEvent('hashchange'));
   }, true);
 }
@@ -1044,39 +1154,74 @@ if (window.SOKO_THEME && window.tailwind) {
   window.tailwind.config = window.SOKO_THEME;
 }
 
-const RootComp = AppDefault || window.__APP__ || window.App;
-const container = document.getElementById('root');
+function getComponent(val) {
+  if (!val) return null;
+  if (typeof val === 'function') return val;
+  if (val && typeof val.default === 'function') return val.default;
+  if (val && typeof val.App === 'function') return val.App;
+  return null;
+}
+
+var RootComp = getComponent(AppDefault) || getComponent(window.__APP__) || getComponent(window.App);
+var container = document.getElementById('root');
 if (!window.__SOKO_ROOT__) {
   window.__SOKO_ROOT__ = ReactDOM.createRoot(container);
 }
 if (RootComp) {
   window.__SOKO_ROOT__.render(React.createElement(RootComp, { key: ${rev} }));
+} else {
+  console.warn('[SokoAI] Composant racine App introuvable ou non exporté');
 }
 `;
 }
 
+let mountQueue: Promise<unknown> = Promise.resolve();
+let previouslyWritten = new Set<string>();
+
 /**
  * Synchronise l'ensemble des fichiers d'une variante React dans le WebContainer actif.
  * Vite HMR met à jour l'iframe en < 50ms sans redémarrer le serveur ni réinstaller npm.
+ *
+ * Les montages sont sérialisés : deux montages concurrents (changement rapide de
+ * variante) supprimaient/écrivaient `src/` en même temps -> "Failed to load url /src/main.jsx".
  */
-export async function mountReactProjectFiles(files: ReactProjectFile[]): Promise<string> {
+export function mountReactProjectFiles(files: ReactProjectFile[]): Promise<string> {
+  const run = mountQueue.then(() => mountReactProjectFilesNow(files));
+  mountQueue = run.catch(() => undefined);
+  return run;
+}
+
+async function mountReactProjectFilesNow(files: ReactProjectFile[]): Promise<string> {
   if (currentState.phase === "error") {
     return "";
   }
   const instance = await ensureWebContainerReady();
   updateState({ lastPreviewError: null });
-
-  // Purge : une variante précédente a pu écrire des modules que la variante
-  // courante n'a plus (imports résolus vers du code périmé -> rendu faux).
-  try {
-    await instance.fs.rm("src", { recursive: true });
-  } catch {
-    // premier mount : src n'existe pas encore
-  }
+  const { findSyntaxIssue, salvageModule } = await import("./jsx-salvage");
 
   // Stubs automatiques pour les imports vers des fichiers que le LLM n'a jamais créés
   // (sinon Vite sert l'index.html pour ces modules -> MIME text/html -> page blanche).
   const stubbed = buildImportStubs(files);
+
+  // Filet de sécurité absolu : garantir la présence de src/data/store.js si absent
+  if (!stubbed.files.some((f) => /(?:^|\/)store\.(jsx?|tsx?|mjs)$/i.test(f.path))) {
+    stubbed.files.push({
+      path: "src/data/store.js",
+      content: `// Configuration de la boutique SokoAI
+export const STORE = (typeof window !== 'undefined' ? (window.STORE || window.store) : null) || {
+  name: "Ma Boutique",
+  city: "Abidjan",
+  whatsapp: "2250700000000",
+  tagline: "Votre boutique en ligne",
+  horaires: "7j/7 de 8h à 20h",
+  zonesLivraison: ["Abidjan", "Intérieur du pays"],
+  moyensPaiement: ["Wave", "Orange Money", "MTN MoMo", "Paiement à la livraison"],
+};
+export const store = STORE;
+export default STORE;
+`,
+    });
+  }
 
   await instance.fs.mkdir("src/components", { recursive: true });
   await instance.fs.mkdir("src/data", { recursive: true });
@@ -1090,18 +1235,76 @@ export async function mountReactProjectFiles(files: ReactProjectFile[]): Promise
     if (dir) {
       await instance.fs.mkdir(dir, { recursive: true });
     }
-    let raw = file.content;
+    let content = file.content;
     if (cleanPath.startsWith("src/") && isTransformableModule(cleanPath)) {
-      raw = rewriteRelativeImports(raw, cleanPath, realPaths);
-      raw = prepareModuleFile(cleanPath, raw);
+      let src = rewriteRelativeImports(content, cleanPath, realPaths);
+      if (findSyntaxIssue(src)) {
+        src = salvageModule(src, cleanPath).code;
+        console.warn(`[SokoAI] ${cleanPath} tronqué par l'IA : réparé avant préparation`);
+      }
+      content = prepareModuleFile(cleanPath, src);
+      if (findSyntaxIssue(content)) {
+        content = salvageModule(content, cleanPath).code;
+        console.warn(`[SokoAI] ${cleanPath} invalide après préparation : sécurisé`);
+      }
     }
-    const content = raw;
     await instance.fs.writeFile(cleanPath, content);
     writtenPaths.push(cleanPath);
   }
 
+  // Fichiers CSS fondamentaux : évite les 404 si un composant importe './index.css' ou './App.css'
+  if (!writtenPaths.includes("src/index.css")) {
+    await instance.fs.writeFile("src/index.css", "/* SokoAI base stylesheet */\n");
+    writtenPaths.push("src/index.css");
+  }
+  if (!writtenPaths.includes("src/App.css")) {
+    await instance.fs.writeFile("src/App.css", "/* SokoAI component stylesheet */\n");
+    writtenPaths.push("src/App.css");
+  }
+
+  // Favicon et index.html : prévient les 404 du navigateur dans la console
+  try {
+    await instance.fs.writeFile(
+      "index.html",
+      `<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛍️</text></svg>" />
+    <title>Boutique SokoAI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      html, body { min-height: 100%; margin: 0; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+`
+    );
+    await instance.fs.writeFile("favicon.ico", "");
+  } catch {
+    // non critique
+  }
+
   const mainEntry = buildMainEntry(writtenPaths);
   await instance.fs.writeFile("src/main.jsx", mainEntry);
+
+  // Purge APRÈS écriture : seuls les modules périmés d'une variante précédente
+  // sont supprimés (src/ n'est jamais vide pendant que Vite le lit).
+  const current = new Set([...writtenPaths, "src/main.jsx"]);
+  for (const stale of previouslyWritten) {
+    if (current.has(stale)) continue;
+    try {
+      await instance.fs.rm(stale);
+    } catch {
+      // déjà supprimé
+    }
+  }
+  previouslyWritten = current;
 
   const state = getWebContainerState();
   return state.previewUrl || "";

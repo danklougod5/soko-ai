@@ -292,14 +292,62 @@ const LEATHER_PRODUCTS: ProductItem[] = [
 /**
  * Generate 3 distinct design templates according to domain
  */
+function finalizeDirections(dirs: DesignDirection[], store: StoreThemeConfig): DesignDirection[] {
+  return dirs.map((dir, idx) => {
+    const isMain = idx === 0;
+    return {
+      ...dir,
+      isMain,
+      badge: isMain
+        ? "⭐ Modèle Principal (Votre Choix)"
+        : (dir.badge && !dir.badge.includes("⭐") ? `✨ ${dir.badge}` : (idx === 1 ? "✨ Alternative Dynamique" : "✨ Alternative Éditoriale")),
+      products: dir.products && dir.products.length > 0 ? dir.products : store.products,
+      storytelling: dir.storytelling || store.storytelling || {
+        title: `Notre Passion pour ${store.storeName}`,
+        content: `Découvrez l'authenticité et le savoir-faire de ${store.storeName}. Chaque produit est préparé ou sélectionné avec une rigueur absolue.`,
+        highlights: ["Qualité supérieure", "Service client réactif sur WhatsApp", "Livraison rapide et soignée"],
+      },
+      testimonials: dir.testimonials && dir.testimonials.length > 0 ? dir.testimonials : store.testimonials || [
+        { name: "Awa K.", location: "Abidjan Cocody", comment: "Service impeccable, livraison rapide et produit conforme !", rating: 5 },
+        { name: "Marc D.", location: "Plateau", comment: "Commande passée par WhatsApp en 2 minutes, je recommande à 100%.", rating: 5 },
+      ],
+      deliveryZones: dir.deliveryZones || store.deliveryZones,
+      stats: dir.stats || store.stats || [
+        { value: "4.9/5", label: "Avis vérifiés" },
+        { value: "30 min", label: "Délai moyen" },
+        { value: "+2 000", label: "Clients comblés" },
+      ],
+      faq: dir.faq || store.faq || [
+        { question: "Comment commander ?", answer: "Sélectionnez vos articles et validez directement via Wave ou WhatsApp." },
+        { question: "Quels sont les délais ?", answer: "Livraison rapide dans toutes les zones desservies sous 24h ou 30 min." },
+      ],
+      marqueeItems: dir.marqueeItems || store.marqueeItems || ["⚡ Livraison Express", "💳 Paiement Wave & Orange Money", "⭐ 100% Qualité Garantie", "📱 Commande WhatsApp 1 Clic"],
+      layoutStructure: dir.layoutStructure || (idx === 0 ? {
+        heroType: "split_card",
+        catalogLayout: "grid",
+        sectionOrder: ["hero", "trustBadges", "catalog", "storytelling", "testimonials"],
+      } : idx === 1 ? {
+        heroType: "bento_grid",
+        catalogLayout: "editorial_cards",
+        sectionOrder: ["hero", "featuredPromo", "catalog", "storytelling", "testimonials"],
+      } : {
+        heroType: "full_banner",
+        catalogLayout: "masonry",
+        sectionOrder: ["hero", "trustBadges", "catalog", "storytelling", "deliveryInfo"],
+      }),
+    };
+  });
+}
+
 export function generateDirectionsForStore(
   store: StoreThemeConfig,
   prompt: string
 ): DesignDirection[] {
   const { sector } = detectDomainFromPrompt(prompt || store.storeName);
 
+  let rawDirs: DesignDirection[];
   if (sector === "food") {
-    return [
+    rawDirs = [
       {
         id: "dir-1",
         name: "Direction #1 (Street Food & Fast Delivery)",
@@ -364,11 +412,8 @@ export function generateDirectionsForStore(
         products: GARBA_PRODUCTS,
       },
     ];
-  }
-
-  // FASHION / WAX / BAZIN
-  if (sector === "mode") {
-    return [
+  } else if (sector === "mode") {
+    rawDirs = [
       {
         id: "dir-1",
         name: "Direction #1 (Afro-Chic & Moderne)",
@@ -433,74 +478,76 @@ export function generateDirectionsForStore(
         products: WAX_PRODUCTS,
       },
     ];
+  } else {
+    // DEFAULT / LEATHER / GENERAL
+    rawDirs = [
+      {
+        id: "dir-1",
+        name: "Direction #1 (Minimalist Luxe Africa)",
+        tagline: "Élégant • Matières Nobles • Confection Artisanale",
+        badge: "Intemporel",
+        style: "luxe",
+        primaryColor: "#92400E",
+        secondaryColor: "#1C1917",
+        accentColor: "#D97706",
+        backgroundColor: "#FAF8F5",
+        textColor: "#1C1917",
+        fontHeading: "Playfair Display",
+        fontBody: "Inter",
+        heroHeadline: `${store.storeName} — Objets d'exception façonnés à la main`,
+        heroSubheadline: "Chaque pièce raconte une histoire de savoir-faire et d'exigence, livrée directement chez vous.",
+        badgeText: "Artisanat d'exception",
+        ctaText: "Parcourir la collection",
+        previewImage: "https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=800&auto=format&fit=crop&q=80",
+        description: "Ambiance atelier d'artisan, typographie serif élégante, tons naturels chaleureux.",
+        products: LEATHER_PRODUCTS,
+      },
+      {
+        id: "dir-2",
+        name: "Direction #2 (Dark Modern Studio)",
+        tagline: "Contraste • Épuré • Impact Visuel",
+        badge: "Moderne",
+        style: "modern",
+        primaryColor: "#3B82F6",
+        secondaryColor: "#0B0C10",
+        accentColor: "#60A5FA",
+        backgroundColor: "#0D0E12",
+        textColor: "#F3F4F6",
+        fontHeading: "Outfit",
+        fontBody: "Inter",
+        heroHeadline: "Le Futur du Commerce en Ligne Africain",
+        heroSubheadline: "Commande rapide en 1 clic par Wave et Orange Money avec traçabilité complète de livraison.",
+        badgeText: "Livraison Express",
+        ctaText: "Acheter maintenant",
+        previewImage: "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=800&auto=format&fit=crop&q=80",
+        description: "Interface sombre hyper-moderne, badges lumineux et parcours d'achat optimisé pour mobile.",
+        products: LEATHER_PRODUCTS,
+      },
+      {
+        id: "dir-3",
+        name: "Direction #3 (Warm Terroir & Artisanat)",
+        tagline: "Terre cuite • Authenticité • Chaleur",
+        badge: "Artisanal",
+        style: "artisanat",
+        primaryColor: "#B45309",
+        secondaryColor: "#451A03",
+        accentColor: "#D97706",
+        backgroundColor: "#FFFBEB",
+        textColor: "#451A03",
+        fontHeading: "Space Grotesk",
+        fontBody: "Inter",
+        heroHeadline: "Le savoir-faire africain à votre portée",
+        heroSubheadline: "Soutenez les artisans et producteurs locaux avec des pièces uniques et authentiques.",
+        badgeText: "100% Local",
+        ctaText: "Voir les créations",
+        previewImage: "https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=800&auto=format&fit=crop&q=80",
+        description: "Palette organique chaleureuse qui inspire confiance et authenticité.",
+        products: LEATHER_PRODUCTS,
+      },
+    ];
   }
 
-  // DEFAULT / LEATHER / GENERAL
-  return [
-    {
-      id: "dir-1",
-      name: "Direction #1 (Minimalist Luxe Africa)",
-      tagline: "Élégant • Matières Nobles • Confection Artisanale",
-      badge: "Intemporel",
-      style: "luxe",
-      primaryColor: "#92400E",
-      secondaryColor: "#1C1917",
-      accentColor: "#D97706",
-      backgroundColor: "#FAF8F5",
-      textColor: "#1C1917",
-      fontHeading: "Playfair Display",
-      fontBody: "Inter",
-      heroHeadline: `${store.storeName} — Objets d'exception façonnés à la main`,
-      heroSubheadline: "Chaque pièce raconte une histoire de savoir-faire et d'exigence, livrée directement chez vous.",
-      badgeText: "Artisanat d'exception",
-      ctaText: "Parcourir la collection",
-      previewImage: "https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=800&auto=format&fit=crop&q=80",
-      description: "Ambiance atelier d'artisan, typographie serif élégante, tons naturels chaleureux.",
-      products: LEATHER_PRODUCTS,
-    },
-    {
-      id: "dir-2",
-      name: "Direction #2 (Dark Modern Studio)",
-      tagline: "Contraste • Épuré • Impact Visuel",
-      badge: "Moderne",
-      style: "modern",
-      primaryColor: "#3B82F6",
-      secondaryColor: "#0B0C10",
-      accentColor: "#60A5FA",
-      backgroundColor: "#0D0E12",
-      textColor: "#F3F4F6",
-      fontHeading: "Outfit",
-      fontBody: "Inter",
-      heroHeadline: "Le Futur du Commerce en Ligne Africain",
-      heroSubheadline: "Commande rapide en 1 clic par Wave et Orange Money avec traçabilité complète de livraison.",
-      badgeText: "Livraison Express",
-      ctaText: "Acheter maintenant",
-      previewImage: "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=800&auto=format&fit=crop&q=80",
-      description: "Interface sombre hyper-moderne, badges lumineux et parcours d'achat optimisé pour mobile.",
-      products: LEATHER_PRODUCTS,
-    },
-    {
-      id: "dir-3",
-      name: "Direction #3 (Warm Terroir & Artisanat)",
-      tagline: "Terre cuite • Authenticité • Chaleur",
-      badge: "Artisanal",
-      style: "artisanat",
-      primaryColor: "#B45309",
-      secondaryColor: "#451A03",
-      accentColor: "#D97706",
-      backgroundColor: "#FFFBEB",
-      textColor: "#451A03",
-      fontHeading: "Space Grotesk",
-      fontBody: "Inter",
-      heroHeadline: "Le savoir-faire africain à votre portée",
-      heroSubheadline: "Soutenez les artisans et producteurs locaux avec des pièces uniques et authentiques.",
-      badgeText: "100% Local",
-      ctaText: "Voir les créations",
-      previewImage: "https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=800&auto=format&fit=crop&q=80",
-      description: "Palette organique chaleureuse qui inspire confiance et authenticité.",
-      products: LEATHER_PRODUCTS,
-    },
-  ];
+  return finalizeDirections(rawDirs, store);
 }
 
 /**

@@ -1,8 +1,9 @@
 import { callLLMJson, hasLLMKey } from "./llm";
 import { parseBoltProject, serializeBoltProject } from "./bolt-parser";
-import { lintSyntax } from "./syntax-lint";
+import { findSyntaxIssue, salvageModule } from "./jsx-salvage";
 import { transformAsync } from "@babel/core";
 import { detectDomainFromPrompt } from "./design-directions";
+import { searchMarketInsights } from "./deepseek-search";
 
 /**
  * Moteur React SokoAI basé sur le format <boltArtifact> / <boltAction> de bolt.diy
@@ -57,26 +58,36 @@ Format EXACT exigé :
 
 CONVENTION D'ÉCRITURE DES FICHIERS REACT (Vite + WebContainers) :
 - Écris du code React 18 propre et complet (JAMAIS de code tronqué avec "// ... rest of code").
+- JAMAIS d'appel à \`ReactDOM.createRoot\` ni \`document.getElementById('root')\` : le runtime Vite s'en charge.
+- Ferme TOUJOURS scrupuleusement chaque balise JSX et chaque fonction.
 - En haut de chaque composant : \`const { useState, useEffect, useMemo, useRef } = React;\` (et tu peux exporter tes composants avec \`export const Nom = ...\` ou \`export default Nom\`).
 - Fichiers EXIGÉS dans le <boltArtifact>, dans cet ordre :
   1. <boltAction type="file" filePath="src/theme.js">
      Définit \`window.SOKO_THEME = { theme: { extend: { colors: {...palettedelaboutique}, fontFamily: {...}, borderRadius: {...} } } };\` et \`window.SOKO_FONTS = "Familles+Google+Fonts:weights|Separées+par+pipe";\`
-  2. <boltAction type="file" filePath="src/data/products.js">
-     Définit \`const PRODUCTS = [ ... au moins 10 produits réalistes { id, name, description (2-3 phrases riches), price (nombre FCFA), category, image (URL Unsplash principale, différente par produit, format https://images.unsplash.com/photo-XXXX?auto=format&fit=crop&w=800&q=80), photos: [image + 2 AUTRES URLs Unsplash du même univers], details: [{clé:"Matériaux", valeur:…}, {clé:"Dimensions",…}, {clé:"Origine",…}, {clé:"Entretien",…}] (4 paires minimum), badge? } ];\`
-     et \`const STORE = { name, tagline, city, whatsapp, horaires, zonesLivraison, moyensPaiement: ["Wave","Orange Money","MTN MoMo","Paiement à la livraison"] };\`
-  3. <boltAction type="file" filePath="src/components/Navbar.jsx">
+  2. <boltAction type="file" filePath="src/data/store.js">
+     Définit et exporte obligatoirement la configuration de la boutique :
+     \`export const STORE = { name: "...", tagline: "...", city: "...", whatsapp: "...", horaires: "7j/7 de 8h à 20h", zonesLivraison: ["Abidjan", "Intérieur du pays"], moyensPaiement: ["Wave", "Orange Money", "MTN MoMo", "Paiement à la livraison"] };\`
+     \`export const store = STORE;\`
+     \`export default STORE;\`
+  3. <boltAction type="file" filePath="src/data/products.js">
+     \`import { STORE } from "./store";\`
+     Définit \`export const PRODUCTS = [ ... au moins 10 produits réalistes { id, name, description (2-3 phrases riches), price (nombre FCFA), category, image (URL Unsplash principale, différente par produit, format https://images.unsplash.com/photo-XXXX?auto=format&fit=crop&w=800&q=80), photos: [image + 2 AUTRES URLs Unsplash du même univers], details: [{clé:"Matériaux", valeur:…}, {clé:"Dimensions",…}, {clé:"Origine",…}, {clé:"Entretien",…}] (4 paires minimum), badge? } ];\`
+     \`export const products = PRODUCTS;\`
+     \`export { STORE, STORE as store };\`
+     \`export default PRODUCTS;\`
+  4. <boltAction type="file" filePath="src/components/Navbar.jsx">
      \`const Navbar = () => (...)\` (liens #/accueil #/boutique #/histoire #/contact + bouton Commander WhatsApp + menu burger mobile)
-  4. <boltAction type="file" filePath="src/components/Hero.jsx">
+  5. <boltAction type="file" filePath="src/components/Hero.jsx">
      \`const Hero = () => (...)\` (spectaculaire, image plein cadre, CTA)
-  5. <boltAction type="file" filePath="src/components/ProductCard.jsx">
+  6. <boltAction type="file" filePath="src/components/ProductCard.jsx">
      \`const ProductCard = ({ product, onOpen }) => (...)\` (photo, nom, prix FCFA, badge, boutons Voir + Commander → https://wa.me/STORE.whatsapp?text=produit+prix)
-  6. <boltAction type="file" filePath="src/components/ProductGrid.jsx">
+  7. <boltAction type="file" filePath="src/components/ProductGrid.jsx">
      \`const ProductGrid = () => (...)\` (filtres par catégorie + MODALE FICHE PRODUIT COMPLÈTE en overlay : fermeture via croix / touche Échap / clic sur le fond ; layout grid 2 colonnes — GAUCHE : grande image changeable via 3 vignettes cliquables (product.photos, useState index) ; DROITE : catégorie uppercase, titre, gros prix, description complète (2-3 phrases), puis TOUJOURS un bloc « Détails » OBLIGATOIRE : les 4+ caractéristiques product.details en lignes clé/valeur séparées par de fins filets, sélecteur de quantité avec boutons -/+ (min 1), badge, réassurance (livraison 24h + moyens de paiement) avec pictos SVG, CTA « Commander sur WhatsApp » pleine largeur pré-rempli avec le nom du produit, la quantité et le prix TOTAL (price × quantité), + lien ghost « Poser une question » en dessous, + BOUTON PLEIN ÉCRAN (icône SVG inline lucide Maximize2 / chevrons) qui bascule un state isFull : overlay full écran = fixed inset-0 z-50 overflow-y-auto bg-black/90, contenu modale en colonnes plein écran, galerie pleine largeur, CTA bas de la modale fullscreen)
-  7. <boltAction type="file" filePath="src/components/Sections.jsx">
+  8. <boltAction type="file" filePath="src/components/Sections.jsx">
      \`const SignatureSection / HistoirePage / ContactPage = ...\` (toutes les autres sections/pages)
-  8. <boltAction type="file" filePath="src/components/Footer.jsx">
+  9. <boltAction type="file" filePath="src/components/Footer.jsx">
      \`const Footer = () => (...)\` (4 colonnes : marque+slogan, navigation, contact complet WhatsApp/téléphone/ville/horaires/e-mail, services avec badges paiement ; barre finale © année)
-  9. <boltAction type="file" filePath="src/App.jsx">
+  10. <boltAction type="file" filePath="src/App.jsx">
      \`function App() { ... }\` avec ROUTEUR PAR HASH obligatoire : \`const [page, setPage] = useState((location.hash.replace(/^#\\/?/, '') || 'accueil').split('?')[0]);\` + \`useEffect(() => { const go = () => setPage((location.hash.replace(/^#\\/?/, '') || 'accueil').split('?')[0]); window.addEventListener('hashchange', go); go(); return () => window.removeEventListener('hashchange', go); }, []);\` puis rend \`<Navbar/><main>\` 4 pages selon page (accueil → Hero+ProductGrid+section signature ; boutique → boutique ; histoire → histoire ; contact → contact) \`</main><Footer/>\` et finit par \`window.__APP__ = App; export default App;\`
 - Toutes les valeurs textuelles en FRANÇAIS chaleureux (vouvoiement), devise FCFA sans centimes.
 - Images Unsplash : URL différente par produit, format https://images.unsplash.com/photo-XXXX?auto=format&fit=crop&w=800&q=80
@@ -157,22 +168,38 @@ export function cleanReactCode(content: string): string {
     .replace(/<>/g, "<React.Fragment>")
     .replace(/<\/>/g, "</React.Fragment>")
     // Supprimer tout montage ReactDOM (createRoot ou render), sur une ou plusieurs lignes
-    .replace(/(?:const\s+\w+\s*=\s*)?(?:window\.)?ReactDOM\s*\.[\s\S]*?(?:\.render\s*\([\s\S]*?\))?\s*;?/g, (match) => {
-      if (match.includes("createRoot") || match.includes("render")) return "";
-      return match;
-    })
-    .replace(/ReactDOMClient\s*\.\s*createRoot[\s\S]*?;/g, "")
+    .replace(/(?:window\.)?ReactDOMClient\s*\.\s*createRoot\s*\([\s\S]*?\)\s*\.render\s*\([\s\S]*?\)\s*;?/g, "")
+    .replace(/(?:window\.)?ReactDOM\s*\.\s*createRoot\s*\([\s\S]*?\)\s*\.render\s*\([\s\S]*?\)\s*;?/g, "")
+    .replace(/(?:window\.)?ReactDOM\s*\.\s*render\s*\([\s\S]*?\)\s*;?/g, "")
+    .replace(/const\s+\w+\s*=\s*(?:window\.)?(?:ReactDOM|ReactDOMClient)\.createRoot\([\s\S]*?\)\s*;?/g, "")
+    .replace(/\broot\s*\.\s*render\s*\([\s\S]*?\)\s*;?/g, "")
     .trim();
 }
 
-/** Version sans import/export utilisée uniquement pour le validateur Babel rapide. */
-function stripModuleSyntaxForValidation(content: string): string {
+/** Version sans import/export utilisée pour le validateur Babel rapide. */
+export function stripModuleSyntaxForValidation(content: string): string {
   return content
-    .replace(/^\s*import\b[^\n]*$/gm, "")
-    .replace(/^\s*export\s+default\s+/gm, "")
-    .replace(/^\s*export\s+\{[^}]*\}\s*;?\s*$/gm, "")
-    .replace(/^\s*export\s+/gm, "")
-    .replace(/export default/g, "");
+    // 1. Imports statiques mono ou multi-lignes
+    .replace(/\bimport\s+[\s\S]*?from\s*["'][^"']+["']\s*;?/g, "")
+    .replace(/\bimport\s*["'][^"']+["']\s*;?/g, "")
+    // 2. Supprimer tout montage ReactDOM (createRoot ou render)
+    .replace(/(?:(?:var|let|const)\s+\w+\s*=\s*)?(?:window\.)?ReactDOMClient\s*\.\s*createRoot\s*\([\s\S]*?\)\s*\.render\s*\([\s\S]*?\)\s*;?/g, "")
+    .replace(/(?:(?:var|let|const)\s+\w+\s*=\s*)?(?:window\.)?ReactDOM\s*\.\s*createRoot\s*\([\s\S]*?\)\s*\.render\s*\([\s\S]*?\)\s*;?/g, "")
+    .replace(/(?:(?:var|let|const)\s+\w+\s*=\s*)?(?:window\.)?ReactDOM\s*\.\s*render\s*\([\s\S]*?\)\s*;?/g, "")
+    .replace(/(?:var|let|const)\s+\w+\s*=\s*(?:window\.)?(?:ReactDOM|ReactDOMClient)\.createRoot\([\s\S]*?\)\s*;?/g, "")
+    .replace(/\broot\s*\.\s*render\s*\([\s\S]*?\)\s*;?/g, "")
+    // 3. export default function / class Nom
+    .replace(/\bexport\s+default\s+(function\*?|class)\s+([A-Za-z0-9_$]+)/g, "$1 $2")
+    // 4. export default Nom;
+    .replace(/\bexport\s+default\s+([A-Za-z0-9_$]+)\s*;?/g, "/* export default $1 */")
+    // 5. export default anonyme (objet, tableau, etc.)
+    .replace(/\bexport\s+default\s+/g, "var __SOKO_DEFAULT__ = ")
+    // 6. export { ... } mono ou multi-lignes
+    .replace(/\bexport\s*\{[\s\S]*?\}\s*;?/g, "")
+    // 7. export const / let / var / function / class
+    .replace(/\bexport\s+(?:async\s+)?(?:const|let|var|function\*?|class)\s+/g, "var ")
+    // 8. const / let -> var
+    .replace(/\b(const|let)\s/g, "var ");
 }
 
 const REQUIRED_FILES = ["src/App.jsx", "src/components/Footer.jsx"];
@@ -234,7 +261,7 @@ async function repairBrokenSyntaxFiles(
     if (!/\.(jsx|js|tsx|ts)$/.test(file.path) || /__soko_stub_/.test(file.content)) continue;
 
     for (let attempt = 0; attempt < 2; attempt++) {
-      const issue = lintSyntax(file.content);
+      const issue = findSyntaxIssue(out[i].content);
       if (!issue) break;
 
       try {
@@ -250,7 +277,7 @@ Aucun texte autour, aucun bloc markdown, pas de <boltArtifact> global.`,
           user: `${variantLabel ? `Direction artistique à respecter : ${variantLabel}\n\n` : ""}ERREUR DE SYNTAXE : ${issue.message} (ligne ${issue.line}, colonne ${issue.col})
 
 FICHIER ${file.path} :
-${file.content.slice(0, 12000)}`,
+${out[i].content.slice(0, 12000)}`,
           temperature: 0.3,
           json: false,
         });
@@ -263,6 +290,15 @@ ${file.content.slice(0, 12000)}`,
         break;
       }
     }
+
+    // Filet de sécurité déterministe : si le LLM n'a pas pu réparer la syntaxe,
+    // on coupe au dernier point valide pour que le code soit 100% parsable.
+    if (findSyntaxIssue(out[i].content)) {
+      out[i] = {
+        path: out[i].path,
+        content: salvageModule(out[i].content, out[i].path).code,
+      };
+    }
   }
   return out;
 }
@@ -274,17 +310,77 @@ async function ensureCoreFiles(
 ): Promise<ReactProjectFile[]> {
   const cleaned0 = files.map((f) => ({ path: f.path, content: cleanReactCode(f.content) }));
   const cleaned = await repairBrokenSyntaxFiles(cleaned0, variantLabel);
+
+  // Garantir l'existence et l'export explicite de STORE dans src/data/store.js
+  const storeFile = cleaned.find((f) => /(?:^|\/)store\.(jsx?|tsx?)$/i.test(f.path));
+  if (storeFile) {
+    if (/^\s*export\s+default\s*\{/m.test(storeFile.content)) {
+      storeFile.content = storeFile.content.replace(/^\s*export\s+default\s*\{/m, "export const STORE = {");
+    }
+    const hasDefault = /\bexport\s+default\b|\bas\s+default\b/.test(storeFile.content);
+    const hasSTORE = /\bexport\s+(?:const|let|var)\s+STORE\b|\bexport\s*\{[^}]*\bSTORE\b/.test(storeFile.content);
+    const hasStore = /\bexport\s+(?:const|let|var)\s+store\b|\bexport\s*\{[^}]*\bstore\b/.test(storeFile.content);
+
+    const additions: string[] = [];
+    if (!hasSTORE) {
+      additions.push(
+        `export const STORE = (typeof store !== 'undefined' ? store : (typeof STORE !== 'undefined' ? STORE : { name: "${meta.storeName || "Ma Boutique"}", whatsapp: "${meta.whatsapp || "2250700000000"}" }));`
+      );
+    }
+    if (!hasStore) {
+      additions.push(
+        `export const store = (typeof STORE !== 'undefined' ? STORE : (typeof store !== 'undefined' ? store : { name: "${meta.storeName || "Ma Boutique"}", whatsapp: "${meta.whatsapp || "2250700000000"}" }));`
+      );
+    }
+    if (!hasDefault) {
+      additions.push(`export default (typeof STORE !== 'undefined' ? STORE : (typeof store !== 'undefined' ? store : {}));`);
+    }
+    if (additions.length > 0) {
+      storeFile.content += "\n" + additions.join("\n") + "\n";
+    }
+  } else {
+    cleaned.push({
+      path: "src/data/store.js",
+      content: `// Configuration de la boutique SokoAI
+export const STORE = {
+  name: "${meta.storeName || "Ma Boutique"}",
+  city: "${meta.city || "Abidjan"}",
+  whatsapp: "${meta.whatsapp || "2250700000000"}",
+  tagline: "Votre boutique en ligne",
+  horaires: "7j/7 de 8h à 20h",
+  zonesLivraison: ["Abidjan", "Intérieur du pays"],
+  moyensPaiement: ["Wave", "Orange Money", "MTN MoMo", "Paiement à la livraison"],
+};
+export const store = STORE;
+export default STORE;
+`,
+    });
+  }
+
+  // Garantir l'export de STORE et PRODUCTS dans src/data/products.js
+  const productsFile = cleaned.find((f) => /(?:^|\/)products\.(jsx?|tsx?)$/i.test(f.path));
+  if (productsFile) {
+    if (!/\bexport\s+(?:const|let|var)\s+STORE\b|\bexport\s*\{[^}]*\bSTORE\b/.test(productsFile.content)) {
+      productsFile.content += `\nexport const STORE = (typeof STORE !== 'undefined' ? STORE : (typeof store !== 'undefined' ? store : { name: "${meta.storeName || "Ma Boutique"}", whatsapp: "${meta.whatsapp || "2250700000000"}" }));\nexport const store = STORE;\n`;
+    }
+    if (!/\bexport\s+(?:const|let|var)\s+PRODUCTS\b|\bexport\s*\{[^}]*\bPRODUCTS\b/.test(productsFile.content)) {
+      productsFile.content += `\nexport const PRODUCTS = (typeof PRODUCTS !== 'undefined' ? PRODUCTS : (typeof products !== 'undefined' ? products : []));\nexport const products = PRODUCTS;\n`;
+    }
+  }
+
   const missing = REQUIRED_FILES.filter((req) => !cleaned.some((f) => f.path === req));
   const undefinedComponents = findUndefinedComponents(cleaned);
   const appFile = cleaned.find((f) => f.path === "src/App.jsx");
   const routerMissing = !appFile || !/hashchange/.test(appFile.content);
   const commerceMissing = findMissingCommerceFeatures(cleaned);
+  const initialCompileError = await tryCompile(cleaned);
 
   if (
     missing.length === 0 &&
     undefinedComponents.length === 0 &&
     !routerMissing &&
-    commerceMissing.length === 0
+    commerceMissing.length === 0 &&
+    !initialCompileError
   ) {
     return cleaned;
   }
@@ -347,6 +443,23 @@ Renvoie UNIQUEMENT un <boltArtifact> contenant les <boltAction type="file" fileP
 }
 
 async function tryCompile(files: ReactProjectFile[]): Promise<string | null> {
+  // 1. Tester chaque fichier individuellement pour repérer immédiatement un problème de syntaxe ou d'export local
+  for (const f of files) {
+    if (!/\.(jsx|js|tsx|ts)$/.test(f.path)) continue;
+    try {
+      await transformAsync(f.content, {
+        filename: f.path,
+        babelrc: false,
+        configFile: false,
+        presets: [["@babel/preset-react", { runtime: "classic" }]],
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return `Fichier ${f.path} invalide : ${msg.slice(0, 300)}`;
+    }
+  }
+
+  // 2. Tester le bundle complet
   const bundle = files
     .map(
       (f) =>
@@ -388,16 +501,34 @@ export async function generateReactProject(
     system = system.replace(/VARIANTE IMPOSÉE[\s\S]*$/, "");
   }
 
+  // Détecter l'ambiance / style choisi dans les notes du questionnaire
+  const styleMatch = options?.notes?.match(/(?:ambiance|style|visuelle)[^→\n]*→\s*([^\n]+)/i);
+  const chosenStyle = styleMatch ? styleMatch[1].trim() : null;
+
+  // Enrichissement via DeepSeek Search (prix réels, tendances et quartiers)
+  let marketData = "";
+  try {
+    marketData = await searchMarketInsights(prompt, options?.city || "Abidjan");
+  } catch {
+    // Non bloquant si la recherche échoue ou pas de réseau
+  }
+
   const userParts: string[] = [`Besoin du commerçant : "${prompt}"`];
   if (options?.storeName) userParts.push(`Nom de la boutique : ${options.storeName}`);
   if (options?.whatsapp) userParts.push(`Numéro WhatsApp du commerçant (liens wa.me) : ${options.whatsapp}`);
   if (options?.city) userParts.push(`Ville de vente/livraison : ${options.city}`);
-  if (options?.notes) userParts.push(`Détails complémentaires :\n${options.notes}`);
+  if (chosenStyle) {
+    userParts.push(`🎯 AMBIANCE & STYLE VISUEL IMPOSÉ DU CLIENT : "${chosenStyle}".\nVeille à ce que les couleurs (src/theme.js), les polices et l'atmosphère générale reflètent rigoureusement ce style.`);
+  }
+  if (options?.notes) userParts.push(`Détails complémentaires du questionnaire :\n${options.notes}`);
+  if (marketData) {
+    userParts.push(`\n=== DONNÉES RÉELLES DU MARCHÉ (RECHERCHE WEB DEEPSEEK) ===\n${marketData}\nUtilise ces repères réels pour calibrer des prix en FCFA réalistes et des produits authentiques.`);
+  }
 
   const raw = await callLLMJson<string>({
     system,
     user: userParts.join("\n"),
-    temperature: options?.variant ? 1.0 : 0.85,
+    temperature: 0.75,
     json: false,
   });
 
@@ -633,45 +764,73 @@ export async function generateReactProjectVariants(
   prompt: string,
   options?: { whatsapp?: string; storeName?: string; city?: string; notes?: string }
 ): Promise<{ variants: ReactVariant[]; failed: string[] }> {
+  // Focus 100% sur le modèle original (principal) pour une qualité maximale et un temps réduit (~12s)
   const directions = getSectorVariantDirections(prompt, options?.notes);
+  const primaryDirection = directions[0] || {
+    id: "main",
+    label: "Modèle Principal",
+    description: "Boutique complète et sur-mesure",
+    guidance: "Design équilibré, moderne et élégant avec catalogue complet et commande WhatsApp.",
+  };
 
-  const results = await Promise.allSettled(
-    directions.map((direction) =>
-      generateReactProject(prompt, { ...options, variant: direction })
-    )
-  );
+  try {
+    const mainProject = await generateReactProject(prompt, {
+      ...options,
+      variant: primaryDirection,
+    });
 
-  const variants: ReactVariant[] = [];
-  const failed: string[] = [];
-  results.forEach((res, i) => {
-    const direction = directions[i];
-    if (res.status === "fulfilled") {
-      variants.push({ ...direction, ...res.value });
-    } else {
-      failed.push(`${direction.label}: ${res.reason instanceof Error ? res.reason.message : "erreur"}`);
-    }
-  });
+    const singleVariant: ReactVariant = {
+      ...primaryDirection,
+      ...mainProject,
+      id: "main",
+      label: primaryDirection.label || "Boutique Sur-Mesure",
+      description: primaryDirection.description || "Boutique e-commerce complète avec catalogue et commande WhatsApp",
+    };
 
-  if (variants.length === 0) throw new Error(failed[0] || "Aucune variante n'a pu être générée");
-  return { variants, failed };
+    return { variants: [singleVariant], failed: [] };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Erreur de génération";
+    return { variants: [], failed: [msg] };
+  }
 }
 
 /**
  * Mise à jour différentielle inspirée de bolt.diy :
  * Le LLM ne renvoie que les <boltAction type="file"> modifiés, qu'on fusionne avec l'arborescence existante.
+ * Accepte une section ciblée facultative pour concentrer précisément l'action de l'IA.
  */
 export async function editReactProject(
   files: ReactProjectFile[],
   meta: ReactProjectMeta,
-  instruction: string
+  instruction: string,
+  targetSection?: string
 ): Promise<ReactProjectResult & { updatedPaths: string[] }> {
   if (!hasLLMKey()) throw new Error("Aucune clé LLM configurée");
 
   const projectXml = serializeBoltProject(files, meta);
 
+  let userPrompt = `=== PROJET ACTUEL ===\n${projectXml}\n=== FIN ===\n\n`;
+
+  if (targetSection && targetSection.trim()) {
+    userPrompt += `🎯 SECTION CIBLÉE PAR LE COMMERÇANT : "${targetSection.trim()}"
+DIRECTIVE STRICTE D'ÉDITION CIBLÉE :
+- Le commerçant a cliqué et sélectionné spécifiquement cette section.
+- Concentre tes modifications UNIQUEMENT sur cette section et son/ses composant(s) associé(s) :
+  * Si "Hero" / "Bannière" -> modifie "src/components/Hero.jsx"
+  * Si "Catalogue" / "Produits" / "Prix" -> modifie "src/components/ProductGrid.jsx", "src/components/ProductCard.jsx" ou "src/data/products.js"
+  * Si "Histoire" / "Avis" / "Livraison" / "Moyens de paiement" -> modifie "src/components/Sections.jsx"
+  * Si "En-tête" / "Menu" / "Navigation" -> modifie "src/components/Navbar.jsx"
+  * Si "Pied de page" / "Contact" -> modifie "src/components/Footer.jsx"
+  * Si "Couleurs" / "Polices" / "Thème" -> modifie "src/theme.js"
+- N'inclus PAS et ne modifie PAS inutilement les fichiers d'autres sections.
+- Instruction spécifique du commerçant : "${instruction}"`;
+  } else {
+    userPrompt += `Demande du commerçant : "${instruction}"`;
+  }
+
   const raw = await callLLMJson<string>({
     system: REACT_EDIT_PROMPT,
-    user: `=== PROJET ACTUEL ===\n${projectXml}\n=== FIN ===\n\nDemande du commerçant : "${instruction}"`,
+    user: userPrompt,
     temperature: 0.5,
     json: false,
   });

@@ -23,6 +23,7 @@
   "menuAccent": "subtle",
   "registries": {
     "@spell": "https://spell.sh/r/{name}.json",
-    "@react-bits": "https://reactbits.dev/r/{name}.json"
+    "@react-bits": "https://reactbits.dev/r/{name}.json",
+    "@beui": "https://beui.dev/r/{name}.json"
   }
 }

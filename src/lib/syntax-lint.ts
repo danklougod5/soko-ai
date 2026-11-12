@@ -21,7 +21,8 @@ export function lintSyntax(code: string): SyntaxIssue | null {
   // Heuristique regex : dernier signe significatif autorisant un regex literal
   const canStartRegex = (prev: string, recentCode: string): boolean => {
     if (!prev) return true;
-    if ("([{,;:!&|?+-%*~^<>=/".includes(prev)) return true;
+    // Note : on exclut '<', '>' et '/' pour éviter de confondre les balises JSX (</tag>, />) avec des regex
+    if ("([{,;:!&|?+-%*~^=".includes(prev)) return true;
     if (prev === ")" || prev === "]") return false;
     if (/\b(?:return|typeof|instanceof|in|of|new|delete|void|throw|case|do|else|yield|await)$/.test(recentCode))
       return true;

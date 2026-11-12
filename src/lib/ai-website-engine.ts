@@ -66,11 +66,18 @@ RÈGLE D'OR ABSOLUE :
 
 CONCEPTION DE 3 DIRECTIONS ARTISTIQUES COMPLÈTEMENT DISTINCTES :
 Les 3 directions vendent LES MÊMES produits du cahier des charges ; elles varient le design, le ton et la mise en avant.
-La direction #1 DOIT correspondre exactement à l'ambiance demandée par le commerçant (réponse "style").
-Les 2 autres proposent des alternatives crédibles pour SON activité, par exemple :
-- Dynamique & Conversion express (couleurs vives, accroche orientée action, achat en 1 clic).
-- Premium & Élégance (fond sombre ou très épuré, accents dorés/émeraude, mise en valeur haut de gamme).
-- Authenticité & Storytelling (tons naturels, savoir-faire, origine des produits).
+- La Direction #1 DOIT être le MODÈLE PRINCIPAL ("isMain": true, badge: "⭐ Modèle Principal (Votre Choix)"). Elle correspond exactement à l'ambiance demandée par le commerçant (réponse "style").
+- Les 2 autres directions (#2 et #3) proposent des alternatives crédibles et complémentaires pour SON activité ("isMain": false), avec des badges distincts (ex: "✨ Alternative Dynamique", "✨ Alternative Élégance & Luxe", "✨ Alternative Terroir & Storytelling").
+
+RÈGLE D'OR : LES 3 DIRECTIONS DOIVENT ÊTRE AUSSI BELLES, RICHES ET COMPLÈTES LES UNES QUE LES AUTRES !
+- Les directions #2 et #3 NE SONT JAMAIS des ébauches au rabais.
+- Chacune des 3 directions DOIT contenir son propre jeu complet de données :
+  * Le catalogue complet des 6 à 8 produits
+  * Son propre storytelling adapté (titre, contenu captivant, 3 points forts)
+  * Ses 3 avis clients réalistes
+  * Ses 3-4 chiffres clés (stats) et 3-4 questions/réponses (faq)
+  * Son bandeau défilant de 4-6 promesses (marqueeItems)
+  * Son architecture moderne dédiée : un "heroType" et un "catalogLayout" distincts, et une composition de 7 à 10 sections variées.
 Le vocabulaire, les accroches et les images doivent être 100% liés à l'activité réelle (jamais de vocabulaire culinaire pour une boutique de mode, etc.).
 
 RÈGLE DE MODERNITÉ & DE COMPOSITION (TRÈS IMPORTANTE) :
@@ -112,6 +119,7 @@ Tu DOIS répondre avec un JSON STRICT respectant cette structure exacte :
       "name": string,
       "tagline": string,
       "badge": string,
+      "isMain": true,
       "style": "warm" | "modern" | "artisanat" | "luxe",
       "primaryColor": string (hex code),
       "secondaryColor": string (hex code),
@@ -342,9 +350,30 @@ export async function generateBespokeStoreWithDeepSeek(
     };
     const baseStore = applyBriefOverrides(baseStoreRaw, brief);
 
+    // Enrich and guarantee 100% completeness and distinct identities for all 3 directions
+    const enrichedDirections: DesignDirection[] = parsed.directions.map((dir, idx) => {
+      const isMain = idx === 0;
+      return {
+        ...dir,
+        isMain,
+        badge: isMain
+          ? (dir.badge && dir.badge.toLowerCase().includes("principal") ? dir.badge : "⭐ Modèle Principal (Votre Choix)")
+          : (dir.badge || (idx === 1 ? "✨ Alternative Dynamique" : "✨ Alternative Éditoriale")),
+        products: (dir.products && dir.products.length > 0) ? dir.products : (firstDir.products || []),
+        storytelling: dir.storytelling || firstDir.storytelling,
+        testimonials: (dir.testimonials && dir.testimonials.length > 0) ? dir.testimonials : (firstDir.testimonials || []),
+        deliveryZones: (dir.deliveryZones && dir.deliveryZones.length > 0) ? dir.deliveryZones : (firstDir.deliveryZones || []),
+        stats: dir.stats || firstDir.stats,
+        faq: dir.faq || firstDir.faq,
+        marqueeItems: dir.marqueeItems || firstDir.marqueeItems,
+        sections: (dir.sections && dir.sections.length > 0) ? dir.sections : firstDir.sections,
+        layoutStructure: dir.layoutStructure || firstDir.layoutStructure,
+      };
+    });
+
     return {
       store: baseStore,
-      directions: parsed.directions,
+      directions: enrichedDirections,
       questions: parsed.questions && parsed.questions.length > 0 ? parsed.questions : [
         {
           id: "q-products",
@@ -490,7 +519,8 @@ function buildBespokeFallbackResult(
       id: "dir-1",
       name: "Direction #1 — Street Food Énergique & Rapide",
       tagline: "Dynamique • Croustillant • Livraison Express 20 Min",
-      badge: "Idéal Vente Flash",
+      badge: "⭐ Modèle Principal (Votre Choix)",
+      isMain: true,
       style: "warm",
       primaryColor: "#EA580C", // Orange braisé
       secondaryColor: "#1C1917",
@@ -544,7 +574,8 @@ function buildBespokeFallbackResult(
       id: "dir-2",
       name: "Direction #2 — Garba Lounge & Maquis Chic",
       tagline: "Nocturne • Gourmet • Plats Signatures",
-      badge: "Ambiance Élite & Sombre",
+      badge: "✨ Alternative Lounge Sombre",
+      isMain: false,
       style: "modern",
       primaryColor: "#F59E0B", // Ambre doré
       secondaryColor: "#0F1117",
@@ -596,7 +627,8 @@ function buildBespokeFallbackResult(
       id: "dir-3",
       name: "Direction #3 — Saveurs d'Abidjan & Ambiance Populaire",
       tagline: "Terroir • Convivial • Générosité Abidjanaise",
-      badge: "Authenticité Terroir",
+      badge: "✨ Alternative Terroir & Convivial",
+      isMain: false,
       style: "artisanat",
       primaryColor: "#059669", // Vert émeraude
       secondaryColor: "#1C1917",

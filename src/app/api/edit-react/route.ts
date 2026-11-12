@@ -12,12 +12,13 @@ export async function POST(req: NextRequest) {
       : [];
     const meta: ReactProjectMeta = body.meta && typeof body.meta === "object" ? body.meta : { storeName: "Ma Boutique", slug: "boutique", whatsapp: "2250700000000", city: "Abidjan" };
     const instruction: string = typeof body.instruction === "string" ? body.instruction.trim() : "";
+    const targetSection: string | undefined = typeof body.targetSection === "string" ? body.targetSection.trim() : undefined;
 
     if (files.length === 0 || !instruction) {
       return NextResponse.json({ error: "Projet et instruction requis" }, { status: 400 });
     }
 
-    const result = await editReactProject(files, meta, instruction);
+    const result = await editReactProject(files, meta, instruction, targetSection);
     return NextResponse.json({
       success: true,
       files: result.files,
